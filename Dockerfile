@@ -8,7 +8,7 @@ WORKDIR /app
 RUN cargo install cargo-watch --locked
 
 ENV CARGO_TARGET_DIR=/app/target
-ENV RUSTFLAGS="-C link-arg=-fuse-ld=mold -Zcodegen-backend=cranelift"
+ENV RUSTFLAGS="-C link-arg=-fuse-ld=mold"
 
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
