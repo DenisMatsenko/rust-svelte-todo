@@ -4,13 +4,14 @@ use argon2::{
 };
 use axum::{
     Json,
-    extract::{FromRequestParts, Path, State},
-    http::{StatusCode, request::Parts},
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 use slug::slugify;
 use sqlx::PgPool;
+use thiserror::Error;
 use ulid::Ulid;
 use utoipa::{OpenApi, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -39,7 +40,6 @@ struct UpdateTodo {
     completed: bool,
 }
 
-// The JSON body sent on every error response.
 #[derive(Serialize, ToSchema)]
 struct ErrorResponse {
     error: String,
@@ -51,18 +51,39 @@ impl ErrorResponse {
     }
 }
 
-// Every variant maps to a specific HTTP status + message.
-// Adding a new error case is just adding a variant here.
+#[derive(Debug, Error)]
 enum AppError {
+    #[error("not found")]
     NotFound,
+
+    #[error("unauthorized")]
     Unauthorized,
-    Conflict(String),      // e.g. unique constraint — caller provides the message
-    Internal(sqlx::Error), // unexpected DB error — message is hidden from the client
+
+    #[error("conflict: {0}")]
+    Conflict(String),
+
+    #[error("internal error: {0}")]
+    Internal(String),
 }
 
-// IntoResponse is the axum trait that lets a type be returned from a handler.
-// Implementing it here means handlers can return Result<T, AppError> and axum
-// knows how to turn the error into an HTTP response automatically.
+impl From<sqlx::Error> for AppError {
+    fn from(err: sqlx::Error) -> Self {
+        Self::Internal(err.to_string())
+    }
+}
+
+impl From<argon2::password_hash::Error> for AppError {
+    fn from(err: argon2::password_hash::Error) -> Self {
+        Self::Internal(err.to_string())
+    }
+}
+
+impl From<jsonwebtoken::errors::Error> for AppError {
+    fn from(err: jsonwebtoken::errors::Error) -> Self {
+        Self::Internal(err.to_string())
+    }
+}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         match self {
@@ -73,35 +94,14 @@ impl IntoResponse for AppError {
                 (StatusCode::UNAUTHORIZED, ErrorResponse::new("unauthorized")).into_response()
             }
             Self::Conflict(msg) => (StatusCode::CONFLICT, ErrorResponse::new(msg)).into_response(),
-            Self::Internal(err) => {
-                // Log the real error server-side, never leak internals to the client.
-                eprintln!("internal error: {err}");
+            Self::Internal(msg) => {
+                eprintln!("internal error: {msg}");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     ErrorResponse::new("internal server error"),
                 )
                     .into_response()
             }
-        }
-    }
-}
-
-// From<sqlx::Error> lets us use ? in handlers — sqlx errors are automatically
-// converted into the right AppError variant.
-impl From<sqlx::Error> for AppError {
-    fn from(err: sqlx::Error) -> Self {
-        match &err {
-            sqlx::Error::Database(db_err) => {
-                match db_err.code().as_deref() {
-                    // Postgres error code 23505 = unique_violation
-                    Some("23505") => Self::Conflict(db_err.constraint().map_or_else(
-                        || "duplicate value".to_owned(),
-                        |c| format!("duplicate value violates unique constraint '{c}'"),
-                    )),
-                    _ => Self::Internal(err),
-                }
-            }
-            _ => Self::Internal(err),
         }
     }
 }
@@ -152,10 +152,14 @@ async fn main() {
     responses((status = 200, description = "List of todos", body = Vec<Todo>)),
     tag = "todos"
 )]
-async fn list_todos(State(pool): State<AppState>) -> Result<Json<Vec<Todo>>, AppError> {
+async fn list_todos(
+    headers: HeaderMap,
+    State(pool): State<AppState>,
+) -> Result<Json<Vec<Todo>>, AppError> {
+    try_authenticate(&pool, &headers).await.ok_or(AppError::Unauthorized)?;
     let todos = sqlx::query_as::<_, Todo>("SELECT * FROM todos")
         .fetch_all(&pool)
-        .await?; // ? calls From<sqlx::Error> for AppError, then returns early if Err
+        .await?;
     Ok(Json(todos))
 }
 
@@ -170,30 +174,27 @@ async fn list_todos(State(pool): State<AppState>) -> Result<Json<Vec<Todo>>, App
     tag = "todos"
 )]
 async fn create_todo(
+    headers: HeaderMap,
     State(pool): State<AppState>,
     Json(payload): Json<CreateTodo>,
 ) -> Result<(StatusCode, Json<Todo>), AppError> {
+    let user = try_authenticate(&pool, &headers).await.ok_or(AppError::Unauthorized)?;
+    println!("Creating todo for user: {}", user.id);
+
     let id = Ulid::new().to_string();
     let mut slug = slugify(&payload.title);
 
-    // check slog uniqueness before attempting insert and add ulid to the slug to guarantee uniqueness without relying on DB errors for control flow
     for attempt in 0..3 {
-        if get_todo_by_slug(State(pool.clone()), slug.clone())
-            .await?
-            .is_some()
-        {
+        if get_todo_by_slug(&pool, &slug).await?.is_some() {
             if attempt == 2 {
-                return Err(AppError::Conflict(format!(
-                    "Failed to generate unique slug after 3 attempts"
-                )));
+                return Err(AppError::Conflict(
+                    "failed to generate unique slug after 3 attempts".to_owned(),
+                ));
             }
-            // append a short random string to the slug and try again
-            let random_suffix: String = Ulid::new().to_string()[20..].to_string();
-            let new_slug = format!("{}-{}", slug, random_suffix);
-            println!("Slug '{slug}' already exists, trying '{new_slug}'");
-            slug = new_slug;
+            let suffix = &Ulid::new().to_string()[20..];
+            slug = format!("{slug}-{suffix}");
         } else {
-            break; // slug is unique, proceed with insert
+            break;
         }
     }
 
@@ -201,7 +202,7 @@ async fn create_todo(
         "INSERT INTO todos (id, slug, title, description) VALUES ($1, $2, $3, $4) RETURNING *",
     )
     .bind(&id)
-    .bind(slug)
+    .bind(&slug)
     .bind(&payload.title)
     .bind(&payload.description)
     .fetch_one(&pool)
@@ -219,16 +220,76 @@ async fn create_todo(
     tag = "todos"
 )]
 async fn get_todo(
+    headers: HeaderMap,
     State(pool): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Todo>, AppError> {
+    try_authenticate(&pool, &headers).await.ok_or(AppError::Unauthorized)?;
     let todo = sqlx::query_as::<_, Todo>("SELECT * FROM todos WHERE id = $1")
         .bind(id)
         .fetch_optional(&pool)
         .await?
-        .ok_or(AppError::NotFound)?; // Option → Result, None becomes AppError::NotFound
+        .ok_or(AppError::NotFound)?;
     Ok(Json(todo))
 }
+
+#[utoipa::path(
+    put,
+    path = "/todos/{id}",
+    request_body = UpdateTodo,
+    responses(
+        (status = 200, description = "Todo updated", body = Todo),
+        (status = 404, description = "Todo not found", body = ErrorResponse),
+        (status = 409, description = "Slug already exists", body = ErrorResponse),
+    ),
+    tag = "todos"
+)]
+async fn update_todo(
+    headers: HeaderMap,
+    State(pool): State<AppState>,
+    Path(id): Path<String>,
+    Json(payload): Json<UpdateTodo>,
+) -> Result<Json<Todo>, AppError> {
+    try_authenticate(&pool, &headers).await.ok_or(AppError::Unauthorized)?;
+    let mut slug = slugify(&payload.title);
+
+    for attempt in 0..3 {
+        if get_todo_by_slug(&pool, &slug).await?.is_some() {
+            if attempt == 2 {
+                return Err(AppError::Conflict(
+                    "failed to generate unique slug after 3 attempts".to_owned(),
+                ));
+            }
+            let suffix = &Ulid::new().to_string()[20..];
+            slug = format!("{slug}-{suffix}");
+        } else {
+            break;
+        }
+    }
+
+    let todo = sqlx::query_as::<_, Todo>(
+        "UPDATE todos SET slug = $1, title = $2, description = $3, completed = $4 WHERE id = $5 RETURNING *",
+    )
+    .bind(&slug)
+    .bind(&payload.title)
+    .bind(&payload.description)
+    .bind(payload.completed)
+    .bind(id)
+    .fetch_optional(&pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    Ok(Json(todo))
+}
+
+async fn get_todo_by_slug(pool: &PgPool, slug: &str) -> Result<Option<Todo>, AppError> {
+    let todo = sqlx::query_as::<_, Todo>("SELECT * FROM todos WHERE slug = $1")
+        .bind(slug)
+        .fetch_optional(pool)
+        .await?;
+    Ok(todo)
+}
+
+// ── Auth ─────────────────────────────────────────────────────────────────────
 
 #[derive(Serialize, ToSchema)]
 struct Token {
@@ -243,67 +304,8 @@ struct CreateUser {
 }
 
 #[derive(Serialize, Deserialize)]
-struct SignupClaims {
+struct Claims {
     id: String,
-}
-
-// AuthUser is an extractor — add it as a handler parameter to require auth.
-// Use Option<AuthUser> for routes that work for both guests and logged-in users.
-struct AuthUser(User);
-
-impl FromRequestParts<AppState> for AuthUser {
-    type Rejection = AppError;
-
-    async fn from_request_parts(
-        parts: &mut Parts,
-        pool: &AppState,
-    ) -> Result<Self, Self::Rejection> {
-        // 1. Pull the Authorization header
-        let auth_header = parts
-            .headers
-            .get("Authorization")
-            .and_then(|v| v.to_str().ok())
-            .ok_or(AppError::Unauthorized)?;
-
-        println!("Auth header: {auth_header}");
-
-        // 2. Expect "Bearer <token>"
-        let token = auth_header
-            .strip_prefix("Bearer ")
-            .ok_or(AppError::Unauthorized)?;
-
-        println!("Token: {token}");
-
-        // 3. Decode and validate the JWT signature
-        let jwt_secret =
-            std::env::var("JWT_SECRET").unwrap_or_else(|_| "dev-secret-change-me".to_string());
-
-        // validate_exp: false + clear required_spec_claims because SignupClaims has no exp field.
-        // In production: add `exp: usize` to SignupClaims, remove these two lines,
-        // and tokens will be rejected once expired.
-        let mut validation = jsonwebtoken::Validation::default();
-        validation.validate_exp = false;
-        validation.required_spec_claims = std::collections::HashSet::new();
-
-        let claims = jsonwebtoken::decode::<SignupClaims>(
-            token,
-            &jsonwebtoken::DecodingKey::from_secret(jwt_secret.as_bytes()),
-            &validation,
-        )
-        .map_err(|_| AppError::Unauthorized)?
-        .claims;
-
-        // 4. Fetch the user from the DB
-        let user =
-            sqlx::query_as::<_, User>("SELECT id, slug, full_name, email FROM users WHERE id = $1")
-                .bind(&claims.id)
-                .fetch_optional(pool)
-                .await
-                .map_err(AppError::Internal)?
-                .ok_or(AppError::Unauthorized)?;
-
-        Ok(Self(user))
-    }
 }
 
 #[derive(Serialize, ToSchema, Clone, sqlx::FromRow)]
@@ -323,6 +325,46 @@ struct DBUser {
     password: String,
 }
 
+async fn try_authenticate(pool: &PgPool, headers: &HeaderMap) -> Option<User> {
+    let token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))?;
+
+    let jwt_secret =
+        std::env::var("JWT_SECRET").unwrap_or_else(|_| "dev-secret-change-me".to_string());
+
+    let mut validation = jsonwebtoken::Validation::default();
+    validation.validate_exp = false;
+    validation.required_spec_claims = std::collections::HashSet::new();
+
+    let claims = jsonwebtoken::decode::<Claims>(
+        token,
+        &jsonwebtoken::DecodingKey::from_secret(jwt_secret.as_bytes()),
+        &validation,
+    )
+    .ok()?
+    .claims;
+
+    sqlx::query_as::<_, User>("SELECT id, slug, full_name, email FROM users WHERE id = $1")
+        .bind(&claims.id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+}
+
+fn encode_jwt(id: &str) -> Result<String, AppError> {
+    let jwt_secret =
+        std::env::var("JWT_SECRET").unwrap_or_else(|_| "dev-secret-change-me".to_string());
+    let token = jsonwebtoken::encode(
+        &jsonwebtoken::Header::default(),
+        &Claims { id: id.to_owned() },
+        &jsonwebtoken::EncodingKey::from_secret(jwt_secret.as_bytes()),
+    )?;
+    Ok(token)
+}
+
 #[utoipa::path(
     post,
     path = "/auth/signup",
@@ -336,71 +378,55 @@ struct DBUser {
 async fn signup(
     State(pool): State<AppState>,
     Json(payload): Json<CreateUser>,
-) -> Result<Json<Token>, AppError> {
-    let email_exists = get_user_by_email(State(pool.clone()), payload.email.clone()).await?;
-    if email_exists.is_some() {
-        return Err(AppError::Conflict(
-            "User with this email already exists".into(),
-        ));
+) -> Result<(StatusCode, Json<Token>), AppError> {
+    if get_user_by_email(&pool, &payload.email).await?.is_some() {
+        return Err(AppError::Conflict("email already in use".to_owned()));
     }
+
     let mut slug = slugify(&payload.full_name);
     for attempt in 0..3 {
-        if get_user_by_slug(State(pool.clone()), slug.clone())
-            .await?
-            .is_some()
-        {
+        if get_user_by_slug(&pool, &slug).await?.is_some() {
             if attempt == 2 {
-                return Err(AppError::Conflict(format!(
-                    "Failed to generate unique slug after 3 attempts"
-                )));
+                return Err(AppError::Conflict(
+                    "failed to generate unique slug after 3 attempts".to_owned(),
+                ));
             }
-            let random_suffix: String = Ulid::new().to_string()[20..].to_string();
-            let new_slug = format!("{}-{}", slug, random_suffix);
-            println!("Slug '{slug}' already exists, trying '{new_slug}'");
-            slug = new_slug;
+            let suffix = &Ulid::new().to_string()[20..];
+            slug = format!("{slug}-{suffix}");
         } else {
-            break; // slug is unique, proceed with insert
+            break;
         }
     }
-    let id = Ulid::new().to_string();
 
-    // SaltString::generate creates a cryptographically random salt per password.
-    // Never reuse salts — each password must have its own unique salt.
+    let id = Ulid::new().to_string();
     let salt = SaltString::generate(&mut OsRng);
     let password_hash = Argon2::default()
-        .hash_password(payload.password.as_bytes(), &salt)
-        .map_err(|e| AppError::Internal(sqlx::Error::Protocol(e.to_string())))?
+        .hash_password(payload.password.as_bytes(), &salt)?
         .to_string();
 
     sqlx::query(
         "INSERT INTO users (id, slug, full_name, email, password) VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(&id)
-    .bind(slug)
+    .bind(&slug)
     .bind(&payload.full_name)
     .bind(&payload.email)
     .bind(password_hash)
     .execute(&pool)
     .await?;
 
-    // Generate a JWT token for the new user
-    let jwt_secret =
-        std::env::var("JWT_SECRET").unwrap_or_else(|_| "dev-secret-change-me".to_string());
-    let claims = SignupClaims { id };
-    let token = jsonwebtoken::encode(
-        &jsonwebtoken::Header::default(),
-        &claims,
-        &jsonwebtoken::EncodingKey::from_secret(jwt_secret.as_bytes()),
-    )
-    .map_err(|e| AppError::Internal(sqlx::Error::Protocol(e.to_string())))?;
-
-    Ok(Json(Token { token }))
+    Ok((
+        StatusCode::CREATED,
+        Json(Token {
+            token: encode_jwt(&id)?,
+        }),
+    ))
 }
 
 #[utoipa::path(
     post,
     path = "/auth/signin",
-    request_body = CreateUser, // In a real app, you'd want a separate SignIn struct without full_name
+    request_body = CreateUser,
     responses(
         (status = 200, description = "User signed in", body = Token),
         (status = 401, description = "Invalid credentials", body = ErrorResponse),
@@ -411,32 +437,21 @@ async fn signin(
     State(pool): State<AppState>,
     Json(payload): Json<CreateUser>,
 ) -> Result<Json<Token>, AppError> {
-    let user = get_user_by_email(State(pool.clone()), payload.email.clone())
+    let user = get_user_by_email(&pool, &payload.email)
         .await?
-        .ok_or(AppError::Conflict("Invalid credentials".into()))?;
+        .ok_or(AppError::Unauthorized)?;
 
-    // Verify the password using Argon2's verify_password function
-    let parsed_hash = PasswordHash::new(&user.password)
-        .map_err(|e| AppError::Internal(sqlx::Error::Protocol(e.to_string())))?;
+    let parsed_hash = PasswordHash::new(&user.password)?;
     if Argon2::default()
         .verify_password(payload.password.as_bytes(), &parsed_hash)
         .is_err()
     {
-        return Err(AppError::Conflict("Invalid credentials".into()));
+        return Err(AppError::Unauthorized);
     }
 
-    // Generate a JWT token for the authenticated user
-    let jwt_secret =
-        std::env::var("JWT_SECRET").unwrap_or_else(|_| "dev-secret-change-me".to_string());
-    let claims = SignupClaims { id: user.id };
-    let token = jsonwebtoken::encode(
-        &jsonwebtoken::Header::default(),
-        &claims,
-        &jsonwebtoken::EncodingKey::from_secret(jwt_secret.as_bytes()),
-    )
-    .map_err(|e| AppError::Internal(sqlx::Error::Protocol(e.to_string())))?;
-
-    Ok(Json(Token { token }))
+    Ok(Json(Token {
+        token: encode_jwt(&user.id)?,
+    }))
 }
 
 #[utoipa::path(
@@ -449,105 +464,25 @@ async fn signin(
     tag = "users"
 )]
 async fn me(
+    headers: HeaderMap,
     State(pool): State<AppState>,
-    AuthUser(user): AuthUser,
 ) -> Result<Json<User>, AppError> {
+    let user = try_authenticate(&pool, &headers).await.ok_or(AppError::Unauthorized)?;
     Ok(Json(user))
 }
 
-async fn get_user_by_id(
-    State(pool): State<AppState>,
-    id: String,
-) -> Result<Option<DBUser>, AppError> {
-    let user = sqlx::query_as::<_, DBUser>("SELECT * FROM users WHERE id = $1")
-        .bind(id)
-        .fetch_optional(&pool)
-        .await?;
-    Ok(user)
-}
-
-async fn get_user_by_slug(
-    State(pool): State<AppState>,
-    slug: String,
-) -> Result<Option<DBUser>, AppError> {
+async fn get_user_by_slug(pool: &PgPool, slug: &str) -> Result<Option<DBUser>, AppError> {
     let user = sqlx::query_as::<_, DBUser>("SELECT * FROM users WHERE slug = $1")
         .bind(slug)
-        .fetch_optional(&pool)
+        .fetch_optional(pool)
         .await?;
     Ok(user)
 }
 
-async fn get_user_by_email(
-    State(pool): State<AppState>,
-    email: String,
-) -> Result<Option<DBUser>, AppError> {
+async fn get_user_by_email(pool: &PgPool, email: &str) -> Result<Option<DBUser>, AppError> {
     let user = sqlx::query_as::<_, DBUser>("SELECT * FROM users WHERE email = $1")
         .bind(email)
-        .fetch_optional(&pool)
+        .fetch_optional(pool)
         .await?;
     Ok(user)
-}
-
-#[utoipa::path(
-    put,
-    path = "/todos/{id}",
-    request_body = UpdateTodo,
-    responses(
-        (status = 200, description = "Todo updated", body = Todo),
-        (status = 404, description = "Todo not found", body = ErrorResponse),
-        (status = 409, description = "Slug already exists", body = ErrorResponse),
-    ),
-    tag = "todos"
-)]
-async fn update_todo(
-    State(pool): State<AppState>,
-    Path(id): Path<String>,
-    Json(payload): Json<UpdateTodo>,
-) -> Result<Json<Todo>, AppError> {
-    let mut slug = slugify(&payload.title);
-
-    // check slog uniqueness before attempting insert and add ulid to the slug to guarantee uniqueness without relying on DB errors for control flow
-    for attempt in 0..3 {
-        if get_todo_by_slug(State(pool.clone()), slug.clone())
-            .await?
-            .is_some()
-        {
-            if attempt == 2 {
-                return Err(AppError::Conflict(format!(
-                    "Failed to generate unique slug after 3 attempts"
-                )));
-            }
-            // append a short random string to the slug and try again
-            let random_suffix: String = Ulid::new().to_string()[20..].to_string();
-            let new_slug = format!("{}-{}", slug, random_suffix);
-            println!("Slug '{slug}' already exists, trying '{new_slug}'");
-            slug = new_slug;
-        } else {
-            break; // slug is unique, proceed with insert
-        }
-    }
-
-    let todo = sqlx::query_as::<_, Todo>(
-        "UPDATE todos SET slug = $1, title = $2, description = $3, completed = $4 WHERE id = $5 RETURNING *",
-    )
-    .bind(slug)
-    .bind(&payload.title)
-    .bind(&payload.description)
-    .bind(payload.completed)
-    .bind(id)
-    .fetch_optional(&pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
-    Ok(Json(todo))
-}
-
-async fn get_todo_by_slug(
-    State(pool): State<AppState>,
-    slug: String,
-) -> Result<Option<Todo>, AppError> {
-    let todo = sqlx::query_as::<_, Todo>("SELECT * FROM todos WHERE slug = $1")
-        .bind(slug)
-        .fetch_optional(&pool)
-        .await?;
-    Ok(todo)
 }

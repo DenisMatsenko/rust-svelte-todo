@@ -15,6 +15,7 @@ utoipa-axum = "0.2"
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
 utoipa-scalar = { version = "0.3", features = ["axum"] }
 slug = "0.1.6"
+thiserror = "2"
 ulid = "1"
 jsonwebtoken = "9"
 argon2 = "0.5"

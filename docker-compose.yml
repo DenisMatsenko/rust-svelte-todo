@@ -23,6 +23,8 @@ services:
       db:
         condition: service_healthy
     volumes:
+      - ./Cargo.toml:/app/Cargo.toml
+      - ./Cargo.lock:/app/Cargo.lock
       - ./src:/app/src
       - ./migrations:/app/migrations
       - cargo-registry:/usr/local/cargo/registry
