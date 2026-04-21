@@ -2,11 +2,16 @@ use axum::http::HeaderMap;
 use sqlx::PgPool;
 use crate::{db, error::AppError, models::{Claims, User}};
 
+#[tracing::instrument(skip_all)]
 pub async fn try_authenticate(pool: &PgPool, headers: &HeaderMap) -> Option<User> {
-    let token = headers
+    let Some(token) = headers
         .get("Authorization")
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))?;
+        .and_then(|v| v.strip_prefix("Bearer "))
+    else {
+        tracing::debug!("missing or malformed Authorization header");
+        return None;
+    };
 
     let jwt_secret =
         std::env::var("JWT_SECRET").unwrap_or_else(|_| "dev-secret-change-me".to_string());
@@ -15,18 +20,29 @@ pub async fn try_authenticate(pool: &PgPool, headers: &HeaderMap) -> Option<User
     validation.validate_exp = false;
     validation.required_spec_claims = std::collections::HashSet::new();
 
-    let claims = jsonwebtoken::decode::<Claims>(
+    let claims = match jsonwebtoken::decode::<Claims>(
         token,
         &jsonwebtoken::DecodingKey::from_secret(jwt_secret.as_bytes()),
         &validation,
-    )
-    .ok()?
-    .claims;
+    ) {
+        Ok(data) => data.claims,
+        Err(err) => {
+            tracing::warn!(error = %err, "jwt decode failed");
+            return None;
+        }
+    };
 
-    db::users::get_by_id(pool, &claims.id)
-        .await
-        .ok()
-        .flatten()
+    match db::users::get_by_id(pool, &claims.id).await {
+        Ok(Some(user)) => Some(user),
+        Ok(None) => {
+            tracing::warn!(user_id = %claims.id, "jwt references unknown user");
+            None
+        }
+        Err(err) => {
+            tracing::error!(error = %err, "db error during authentication");
+            None
+        }
+    }
 }
 
 pub fn encode_jwt(id: &str) -> Result<String, AppError> {

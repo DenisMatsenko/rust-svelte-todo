@@ -57,7 +57,7 @@ impl IntoResponse for AppError {
             }
             Self::Conflict(msg) => (StatusCode::CONFLICT, ErrorResponse::new(msg)).into_response(),
             Self::Internal(msg) => {
-                eprintln!("internal error: {msg}");
+                tracing::error!(error = %msg, "internal server error");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     ErrorResponse::new("internal server error"),

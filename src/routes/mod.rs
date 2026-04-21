@@ -3,6 +3,7 @@ pub mod users;
 
 use axum::Router;
 use sqlx::PgPool;
+use tower_http::trace::TraceLayer;
 use utoipa::{
     OpenApi,
     openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme},
@@ -45,11 +46,12 @@ pub fn build_router(pool: PgPool) -> Router {
         .routes(routes!(users::signin))
         .routes(routes!(users::me))
         .routes(routes!(todos::list_todos, todos::create_todo))
-        .routes(routes!(todos::get_todo, todos::update_todo))
+        .routes(routes!(todos::get_todo, todos::update_todo, todos::delete_todo))
         .with_state(pool)
         .split_for_parts();
 
     router
         .merge(SwaggerUi::new("/swagger").url("/openapi.json", api.clone()))
         .merge(Scalar::with_url("/scalar", api))
+        .layer(TraceLayer::new_for_http())
 }

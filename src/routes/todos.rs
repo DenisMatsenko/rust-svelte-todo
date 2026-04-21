@@ -32,6 +32,7 @@ use ulid::Ulid;
     ),
     tag = "todos"
 )]
+#[tracing::instrument(skip_all)]
 pub async fn list_todos(
     headers: HeaderMap,
     State(pool): State<PgPool>,
@@ -41,7 +42,7 @@ pub async fn list_todos(
         .ok_or(AppError::Unauthorized)?;
 
     let todos = db::todos::list(&pool).await?;
-
+    tracing::debug!(count = todos.len(), "listed todos");
     Ok(Json(todos))
 }
 
@@ -69,6 +70,7 @@ pub async fn list_todos(
     ),
     tag = "todos"
 )]
+#[tracing::instrument(skip_all)]
 pub async fn create_todo(
     headers: HeaderMap,
     State(pool): State<PgPool>,
@@ -82,6 +84,7 @@ pub async fn create_todo(
     for attempt in 0..3 {
         if db::todos::get_by_slug(&pool, &slug).await?.is_some() {
             if attempt == 2 {
+                tracing::warn!(slug = %slug, "slug collision after 3 attempts");
                 return Err(AppError::Conflict(
                     "failed to generate unique slug after 3 attempts".to_owned(),
                 ));
@@ -94,6 +97,7 @@ pub async fn create_todo(
     }
 
     let todo = db::todos::create(&pool, &slug, payload).await?;
+    tracing::info!(todo.id = %todo.id, todo.slug = %todo.slug, "todo created");
     Ok((StatusCode::CREATED, Json(todo)))
 }
 
@@ -118,6 +122,7 @@ pub async fn create_todo(
     ),
     tag = "todos"
 )]
+#[tracing::instrument(skip_all, fields(todo.id = %id))]
 pub async fn get_todo(
     headers: HeaderMap,
     State(pool): State<PgPool>,
@@ -127,9 +132,10 @@ pub async fn get_todo(
         .await
         .ok_or(AppError::Unauthorized)?;
 
-    let todo = db::todos::get_by_id(&pool, &id)
-        .await?
-        .ok_or(AppError::NotFound)?;
+    let todo = db::todos::get_by_id(&pool, &id).await?.ok_or_else(|| {
+        tracing::warn!(todo.id = %id, "todo not found");
+        AppError::NotFound
+    })?;
 
     Ok(Json(todo))
 }
@@ -159,6 +165,7 @@ pub async fn get_todo(
     ),
     tag = "todos"
 )]
+#[tracing::instrument(skip_all, fields(todo.id = %id))]
 pub async fn update_todo(
     headers: HeaderMap,
     State(pool): State<PgPool>,
@@ -168,11 +175,12 @@ pub async fn update_todo(
     try_authenticate(&pool, &headers)
         .await
         .ok_or(AppError::Unauthorized)?;
-    let mut slug = slugify(&payload.title);
 
+    let mut slug = slugify(&payload.title);
     for attempt in 0..3 {
         if db::todos::get_by_slug(&pool, &slug).await?.is_some() {
             if attempt == 2 {
+                tracing::warn!(todo.id = %id, slug = %slug, "slug collision after 3 attempts");
                 return Err(AppError::Conflict(
                     "failed to generate unique slug after 3 attempts".to_owned(),
                 ));
@@ -186,8 +194,12 @@ pub async fn update_todo(
 
     let todo = db::todos::update(&pool, &id, &slug, payload)
         .await?
-        .ok_or(AppError::NotFound)?;
+        .ok_or_else(|| {
+            tracing::warn!(todo.id = %id, "todo not found for update");
+            AppError::NotFound
+        })?;
 
+    tracing::info!(todo.id = %todo.id, todo.slug = %todo.slug, "todo updated");
     Ok(Json(todo))
 }
 
@@ -209,20 +221,25 @@ pub async fn update_todo(
         (status = 204, description = "Todo deleted"),
         (status = 401, description = "Unauthorized", body = crate::error::ErrorResponse),
         (status = 404, description = "Todo not found", body = crate::error::ErrorResponse),
-        (status = 409, description = "Slug already exists", body = crate::error::ErrorResponse),
     ),
     tag = "todos"
 )]
+#[tracing::instrument(skip_all, fields(todo.id = %id))]
 pub async fn delete_todo(
     headers: HeaderMap,
     State(pool): State<PgPool>,
     Path(id): Path<String>,
-) -> Result<(), AppError> {
+) -> Result<StatusCode, AppError> {
     try_authenticate(&pool, &headers)
         .await
         .ok_or(AppError::Unauthorized)?;
 
-    db::todos::delete(&pool, &id).await?;
+    if db::todos::get_by_id(&pool, &id).await?.is_none() {
+        tracing::warn!(todo.id = %id, "todo not found for delete");
+        return Err(AppError::NotFound);
+    }
 
-    Ok(())
+    db::todos::delete(&pool, &id).await?;
+    tracing::info!(todo.id = %id, "todo deleted");
+    Ok(StatusCode::NO_CONTENT)
 }

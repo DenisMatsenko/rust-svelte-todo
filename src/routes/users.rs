@@ -33,6 +33,7 @@ use ulid::Ulid;
     ),
     tag = "auth"
 )]
+#[tracing::instrument(skip_all)]
 pub async fn signup(
     State(pool): State<PgPool>,
     Json(payload): Json<CreateUser>,
@@ -41,6 +42,7 @@ pub async fn signup(
         .await?
         .is_some()
     {
+        tracing::warn!(email = %payload.email, "signup with already-used email");
         return Err(AppError::Conflict("email already in use".to_owned()));
     }
 
@@ -48,6 +50,7 @@ pub async fn signup(
     for attempt in 0..3 {
         if db::users::get_by_slug(&pool, &slug).await?.is_some() {
             if attempt == 2 {
+                tracing::warn!(slug = %slug, "slug collision after 3 attempts during signup");
                 return Err(AppError::Conflict(
                     "failed to generate unique slug after 3 attempts".to_owned(),
                 ));
@@ -68,6 +71,7 @@ pub async fn signup(
     db::users::create(&pool, &id, &slug, &payload.full_name, &payload.email, &password_hash)
         .await?;
 
+    tracing::info!(user.id = %id, user.email = %payload.email, "user signed up");
     Ok((StatusCode::CREATED, Json(Token { token: encode_jwt(&id)? })))
 }
 
@@ -86,22 +90,28 @@ pub async fn signup(
     ),
     tag = "auth"
 )]
+#[tracing::instrument(skip_all)]
 pub async fn signin(
     State(pool): State<PgPool>,
     Json(payload): Json<CreateUser>,
 ) -> Result<Json<Token>, AppError> {
     let user = db::users::get_by_email(&pool, &payload.email)
         .await?
-        .ok_or(AppError::Unauthorized)?;
+        .ok_or_else(|| {
+            tracing::warn!(email = %payload.email, "signin attempt for unknown email");
+            AppError::Unauthorized
+        })?;
 
     let parsed_hash = PasswordHash::new(&user.password)?;
     if Argon2::default()
         .verify_password(payload.password.as_bytes(), &parsed_hash)
         .is_err()
     {
+        tracing::warn!(user.id = %user.id, "invalid password on signin");
         return Err(AppError::Unauthorized);
     }
 
+    tracing::info!(user.id = %user.id, "user signed in");
     Ok(Json(Token {
         token: encode_jwt(&user.id)?,
     }))
@@ -126,9 +136,11 @@ pub async fn signin(
     ),
     tag = "users"
 )]
+#[tracing::instrument(skip_all)]
 pub async fn me(headers: HeaderMap, State(pool): State<PgPool>) -> Result<Json<User>, AppError> {
     let user = try_authenticate(&pool, &headers)
         .await
         .ok_or(AppError::Unauthorized)?;
+    tracing::debug!(user.id = %user.id, "fetched current user");
     Ok(Json(user))
 }

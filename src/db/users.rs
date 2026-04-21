@@ -4,6 +4,7 @@ use crate::{
 };
 use sqlx::PgPool;
 
+#[tracing::instrument(skip(pool), fields(user.id = %id))]
 pub async fn get_by_id(pool: &PgPool, id: &str) -> Result<Option<User>, AppError> {
     let user =
         sqlx::query_as::<_, User>("SELECT id, slug, full_name, email FROM users WHERE id = $1")
@@ -13,6 +14,7 @@ pub async fn get_by_id(pool: &PgPool, id: &str) -> Result<Option<User>, AppError
     Ok(user)
 }
 
+#[tracing::instrument(skip(pool), fields(user.slug = %slug))]
 pub async fn get_by_slug(pool: &PgPool, slug: &str) -> Result<Option<DBUser>, AppError> {
     let user = sqlx::query_as::<_, DBUser>("SELECT * FROM users WHERE slug = $1")
         .bind(slug)
@@ -21,6 +23,7 @@ pub async fn get_by_slug(pool: &PgPool, slug: &str) -> Result<Option<DBUser>, Ap
     Ok(user)
 }
 
+#[tracing::instrument(skip(pool), fields(user.email = %email))]
 pub async fn get_by_email(pool: &PgPool, email: &str) -> Result<Option<DBUser>, AppError> {
     let user = sqlx::query_as::<_, DBUser>("SELECT * FROM users WHERE email = $1")
         .bind(email)
@@ -29,6 +32,7 @@ pub async fn get_by_email(pool: &PgPool, email: &str) -> Result<Option<DBUser>, 
     Ok(user)
 }
 
+#[tracing::instrument(skip(pool, password_hash), fields(user.id = %id, user.email = %email))]
 pub async fn create(
     pool: &PgPool,
     id: &str,
