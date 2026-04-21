@@ -17,8 +17,8 @@ services:
     build: .
     ports:
       - "3000:3000"
-    environment:
-      DATABASE_URL: postgres://postgres:postgres@db:5432/todos
+    env_file:
+      - .env
     depends_on:
       db:
         condition: service_healthy

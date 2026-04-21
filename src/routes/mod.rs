@@ -46,7 +46,11 @@ pub fn build_router(pool: PgPool) -> Router {
         .routes(routes!(users::signin))
         .routes(routes!(users::me))
         .routes(routes!(todos::list_todos, todos::create_todo))
-        .routes(routes!(todos::get_todo, todos::update_todo, todos::delete_todo))
+        .routes(routes!(
+            todos::get_todo,
+            todos::update_todo,
+            todos::delete_todo
+        ))
         .with_state(pool)
         .split_for_parts();
 

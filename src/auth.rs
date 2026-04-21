@@ -8,6 +8,9 @@ pub async fn try_authenticate(pool: &PgPool, headers: &HeaderMap) -> Option<User
         .get("Authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
+        .and_then(|v| v.split(',').next())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
     else {
         tracing::debug!("missing or malformed Authorization header");
         return None;
@@ -15,9 +18,7 @@ pub async fn try_authenticate(pool: &PgPool, headers: &HeaderMap) -> Option<User
 
     let jwt_secret =
         std::env::var("JWT_SECRET").unwrap_or_else(|_| "dev-secret-change-me".to_string());
-
     let mut validation = jsonwebtoken::Validation::default();
-    validation.validate_exp = false;
     validation.required_spec_claims = std::collections::HashSet::new();
 
     let claims = match jsonwebtoken::decode::<Claims>(
@@ -48,9 +49,15 @@ pub async fn try_authenticate(pool: &PgPool, headers: &HeaderMap) -> Option<User
 pub fn encode_jwt(id: &str) -> Result<String, AppError> {
     let jwt_secret =
         std::env::var("JWT_SECRET").unwrap_or_else(|_| "dev-secret-change-me".to_string());
+    let exp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| AppError::Internal(e.to_string()))?
+        .as_secs()
+        .saturating_add(60 * 60 * 24 * 7); // 7 days
+
     let token = jsonwebtoken::encode(
         &jsonwebtoken::Header::default(),
-        &Claims { id: id.to_owned() },
+        &Claims { id: id.to_owned(), exp },
         &jsonwebtoken::EncodingKey::from_secret(jwt_secret.as_bytes()),
     )?;
     Ok(token)

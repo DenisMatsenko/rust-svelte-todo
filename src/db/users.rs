@@ -1,7 +1,4 @@
-use crate::{
-    error::AppError,
-    models::{DBUser, User},
-};
+use crate::{error::AppError, models::{DBUser, User}};
 use sqlx::PgPool;
 
 #[tracing::instrument(skip(pool), fields(user.id = %id))]

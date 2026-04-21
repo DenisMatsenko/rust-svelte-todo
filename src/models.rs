@@ -38,6 +38,7 @@ pub struct CreateUser {
 #[derive(Serialize, Deserialize)]
 pub struct Claims {
     pub id: String,
+    pub exp: u64,
 }
 
 #[derive(Serialize, ToSchema, Clone, sqlx::FromRow)]
