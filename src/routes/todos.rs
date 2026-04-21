@@ -190,3 +190,39 @@ pub async fn update_todo(
 
     Ok(Json(todo))
 }
+
+/// Delete todo
+///
+/// Deletes a todo identified by its ID. Returns 204 No Content on success.
+///
+/// The request must include a valid Bearer token in the Authorization header for authentication
+/// (use the `/auth/signup` or `/auth/signin` endpoint to obtain a token).
+#[utoipa::path(
+    delete,
+    path = "/todos/{id}",
+    params(
+        ("id" = String, Path, description = "The todo ID"),
+        ("Authorization" = String, Header, description = "Bearer access token. Format: `Bearer <token>`")
+    ),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = 204, description = "Todo deleted"),
+        (status = 401, description = "Unauthorized", body = crate::error::ErrorResponse),
+        (status = 404, description = "Todo not found", body = crate::error::ErrorResponse),
+        (status = 409, description = "Slug already exists", body = crate::error::ErrorResponse),
+    ),
+    tag = "todos"
+)]
+pub async fn delete_todo(
+    headers: HeaderMap,
+    State(pool): State<PgPool>,
+    Path(id): Path<String>,
+) -> Result<(), AppError> {
+    try_authenticate(&pool, &headers)
+        .await
+        .ok_or(AppError::Unauthorized)?;
+
+    db::todos::delete(&pool, &id).await?;
+
+    Ok(())
+}

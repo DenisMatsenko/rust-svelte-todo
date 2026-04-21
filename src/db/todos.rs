@@ -1,4 +1,7 @@
-use crate::{error::AppError, models::{CreateTodo, Todo, UpdateTodo}};
+use crate::{
+    error::AppError,
+    models::{CreateTodo, Todo, UpdateTodo},
+};
 use sqlx::PgPool;
 use ulid::Ulid;
 
@@ -23,7 +26,12 @@ pub async fn create(pool: &PgPool, slug: &str, payload: CreateTodo) -> Result<To
     .map_err(AppError::from)
 }
 
-pub async fn update(pool: &PgPool, id: &str, slug: &str, update_todo: UpdateTodo) -> Result<Option<Todo>, AppError> {
+pub async fn update(
+    pool: &PgPool,
+    id: &str,
+    slug: &str,
+    update_todo: UpdateTodo,
+) -> Result<Option<Todo>, AppError> {
     let todo = sqlx::query_as::<_, Todo>(
         "UPDATE todos SET slug = $1, title = $2, description = $3, completed = $4 WHERE id = $5 RETURNING *",
     )
@@ -51,4 +59,12 @@ pub async fn get_by_slug(pool: &PgPool, slug: &str) -> Result<Option<Todo>, AppE
         .fetch_optional(pool)
         .await?;
     Ok(todo)
+}
+
+pub async fn delete(pool: &PgPool, id: &str) -> Result<(), AppError> {
+    sqlx::query("DELETE FROM todos WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
