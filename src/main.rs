@@ -4,22 +4,21 @@ mod error;
 mod models;
 mod routes;
 
-use sqlx::PgPool;
-
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new(
                     "rust_svelte_todo=debug,tower_http=debug,axum::rejection=trace",
-                )),
+                )
+            }),
         )
         .init();
 
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
 
-    let pool = PgPool::connect(&database_url)
+    let pool = sqlx::PgPool::connect(&database_url)
         .await
         .expect("Failed to connect to database");
 
@@ -28,7 +27,8 @@ async fn main() {
         .await
         .expect("Failed to run migrations");
 
-    let app: axum::Router = routes::build_router(pool);
+    let db = db::Database::create(pool);
+    let app: axum::Router = routes::build_router(db);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     tracing::info!("listening on http://localhost:3000");

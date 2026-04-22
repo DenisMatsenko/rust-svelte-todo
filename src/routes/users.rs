@@ -1,6 +1,6 @@
 use crate::{
     auth::{encode_jwt, OptionalAuthSession},
-    db,
+    db::Database,
     error::AppError,
     models::{CreateUser, Token, User},
 };
@@ -14,7 +14,6 @@ use axum::{
     http::StatusCode,
 };
 use slug::slugify;
-use sqlx::PgPool;
 use ulid::Ulid;
 
 /// Sign up
@@ -35,20 +34,17 @@ use ulid::Ulid;
 )]
 #[tracing::instrument(skip_all)]
 pub async fn signup(
-    State(pool): State<PgPool>,
+    State(db): State<Database>,
     Json(payload): Json<CreateUser>,
 ) -> Result<(StatusCode, Json<Token>), AppError> {
-    if db::users::get_by_email(&pool, &payload.email)
-        .await?
-        .is_some()
-    {
+    if db.get_user_by_email(&payload.email).await?.is_some() {
         tracing::warn!(email = %payload.email, "signup with already-used email");
         return Err(AppError::Conflict("email already in use".to_owned()));
     }
 
     let mut slug = slugify(&payload.full_name);
     for attempt in 0..3 {
-        if db::users::get_by_slug(&pool, &slug).await?.is_some() {
+        if db.get_user_by_slug(&slug).await?.is_some() {
             if attempt == 2 {
                 tracing::warn!(slug = %slug, "slug collision after 3 attempts during signup");
                 return Err(AppError::Conflict(
@@ -68,7 +64,7 @@ pub async fn signup(
         .hash_password(payload.password.as_bytes(), &salt)?
         .to_string();
 
-    db::users::create(&pool, &id, &slug, &payload.full_name, &payload.email, &password_hash)
+    db.create_user(&id, &slug, &payload.full_name, &payload.email, &password_hash)
         .await?;
 
     tracing::info!(user.id = %id, user.email = %payload.email, "user signed up");
@@ -92,15 +88,13 @@ pub async fn signup(
 )]
 #[tracing::instrument(skip_all)]
 pub async fn signin(
-    State(pool): State<PgPool>,
+    State(db): State<Database>,
     Json(payload): Json<CreateUser>,
 ) -> Result<Json<Token>, AppError> {
-    let user = db::users::get_by_email(&pool, &payload.email)
-        .await?
-        .ok_or_else(|| {
-            tracing::warn!(email = %payload.email, "signin attempt for unknown email");
-            AppError::Unauthorized
-        })?;
+    let user = db.get_user_by_email(&payload.email).await?.ok_or_else(|| {
+        tracing::warn!(email = %payload.email, "signin attempt for unknown email");
+        AppError::Unauthorized
+    })?;
 
     let parsed_hash = PasswordHash::new(&user.password)?;
     if Argon2::default()

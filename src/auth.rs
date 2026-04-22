@@ -3,28 +3,27 @@ use std::convert::Infallible;
 use axum::extract::FromRequestParts;
 use axum::http::HeaderMap;
 use axum::http::request::Parts;
-use sqlx::PgPool;
 
-use crate::{db, error::AppError, models::{Claims, User}};
+use crate::{db::Database, error::AppError, models::{Claims, User}};
 
 /// Extractor for routes that work for both anonymous and authenticated users.
 /// Always succeeds — use `session.0` to get `Option<User>`.
 #[derive(Debug, Clone)]
 pub struct OptionalAuthSession(pub Option<User>);
 
-impl FromRequestParts<PgPool> for OptionalAuthSession {
+impl FromRequestParts<Database> for OptionalAuthSession {
     type Rejection = Infallible;
 
     async fn from_request_parts(
         parts: &mut Parts,
-        state: &PgPool,
+        state: &Database,
     ) -> Result<Self, Self::Rejection> {
         Ok(Self(try_authenticate(state, &parts.headers).await))
     }
 }
 
 #[tracing::instrument(skip_all)]
-pub async fn try_authenticate(pool: &PgPool, headers: &HeaderMap) -> Option<User> {
+pub async fn try_authenticate(db: &Database, headers: &HeaderMap) -> Option<User> {
     let Some(token) = headers
         .get("Authorization")
         .and_then(|v| v.to_str().ok())
@@ -54,7 +53,7 @@ pub async fn try_authenticate(pool: &PgPool, headers: &HeaderMap) -> Option<User
         }
     };
 
-    match db::users::get_by_id(pool, &claims.id).await {
+    match db.get_user_by_id(&claims.id).await {
         Ok(Some(user)) => Some(user),
         Ok(None) => {
             tracing::warn!(user_id = %claims.id, "jwt references unknown user");

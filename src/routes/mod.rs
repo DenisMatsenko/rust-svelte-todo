@@ -2,7 +2,6 @@ pub mod todos;
 pub mod users;
 
 use axum::Router;
-use sqlx::PgPool;
 use tower_http::trace::TraceLayer;
 use utoipa::{
     OpenApi,
@@ -11,6 +10,8 @@ use utoipa::{
 use utoipa_axum::{router::OpenApiRouter, routes};
 use utoipa_scalar::{Scalar, Servable};
 use utoipa_swagger_ui::SwaggerUi;
+
+use crate::db::Database;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -40,7 +41,7 @@ impl utoipa::Modify for SecurityAddon {
     }
 }
 
-pub fn build_router(pool: PgPool) -> Router {
+pub fn build_router(db: Database) -> Router {
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .routes(routes!(users::signup))
         .routes(routes!(users::signin))
@@ -51,7 +52,7 @@ pub fn build_router(pool: PgPool) -> Router {
             todos::update_todo,
             todos::delete_todo
         ))
-        .with_state(pool)
+        .with_state(db)
         .split_for_parts();
 
     router

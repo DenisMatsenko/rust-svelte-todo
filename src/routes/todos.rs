@@ -1,6 +1,6 @@
 use crate::{
     auth::OptionalAuthSession,
-    db,
+    db::Database,
     error::AppError,
     models::{CreateTodo, Todo, UpdateTodo},
 };
@@ -10,7 +10,6 @@ use axum::{
     http::StatusCode,
 };
 use slug::slugify;
-use sqlx::PgPool;
 use ulid::Ulid;
 
 /// List all todos
@@ -35,11 +34,11 @@ use ulid::Ulid;
 #[tracing::instrument(skip_all)]
 pub async fn list_todos(
     OptionalAuthSession(user): OptionalAuthSession,
-    State(pool): State<PgPool>,
+    State(db): State<Database>,
 ) -> Result<Json<Vec<Todo>>, AppError> {
     user.ok_or(AppError::Unauthorized)?;
 
-    let todos = db::todos::list(&pool).await?;
+    let todos = db.list_todos().await?;
     tracing::debug!(count = todos.len(), "listed todos");
     Ok(Json(todos))
 }
@@ -71,14 +70,14 @@ pub async fn list_todos(
 #[tracing::instrument(skip_all)]
 pub async fn create_todo(
     OptionalAuthSession(user): OptionalAuthSession,
-    State(pool): State<PgPool>,
+    State(db): State<Database>,
     Json(payload): Json<CreateTodo>,
 ) -> Result<(StatusCode, Json<Todo>), AppError> {
     user.ok_or(AppError::Unauthorized)?;
 
     let mut slug = slugify(&payload.title);
     for attempt in 0..3 {
-        if db::todos::get_by_slug(&pool, &slug).await?.is_some() {
+        if db.get_todo_by_slug(&slug).await?.is_some() {
             if attempt == 2 {
                 tracing::warn!(slug = %slug, "slug collision after 3 attempts");
                 return Err(AppError::Conflict(
@@ -92,7 +91,7 @@ pub async fn create_todo(
         }
     }
 
-    let todo = db::todos::create(&pool, &slug, payload).await?;
+    let todo = db.create_todo(&slug, payload).await?;
     tracing::info!(todo.id = %todo.id, todo.slug = %todo.slug, "todo created");
     Ok((StatusCode::CREATED, Json(todo)))
 }
@@ -121,12 +120,12 @@ pub async fn create_todo(
 #[tracing::instrument(skip_all, fields(todo.id = %id))]
 pub async fn get_todo(
     OptionalAuthSession(user): OptionalAuthSession,
-    State(pool): State<PgPool>,
+    State(db): State<Database>,
     Path(id): Path<String>,
 ) -> Result<Json<Todo>, AppError> {
     user.ok_or(AppError::Unauthorized)?;
 
-    let todo = db::todos::get_by_id(&pool, &id).await?.ok_or_else(|| {
+    let todo = db.get_todo_by_id(&id).await?.ok_or_else(|| {
         tracing::warn!(todo.id = %id, "todo not found");
         AppError::NotFound
     })?;
@@ -162,7 +161,7 @@ pub async fn get_todo(
 #[tracing::instrument(skip_all, fields(todo.id = %id))]
 pub async fn update_todo(
     OptionalAuthSession(user): OptionalAuthSession,
-    State(pool): State<PgPool>,
+    State(db): State<Database>,
     Path(id): Path<String>,
     Json(payload): Json<UpdateTodo>,
 ) -> Result<Json<Todo>, AppError> {
@@ -170,7 +169,7 @@ pub async fn update_todo(
 
     let mut slug = slugify(&payload.title);
     for attempt in 0..3 {
-        if db::todos::get_by_slug(&pool, &slug).await?.is_some() {
+        if db.get_todo_by_slug(&slug).await?.is_some() {
             if attempt == 2 {
                 tracing::warn!(todo.id = %id, slug = %slug, "slug collision after 3 attempts");
                 return Err(AppError::Conflict(
@@ -184,7 +183,8 @@ pub async fn update_todo(
         }
     }
 
-    let todo = db::todos::update(&pool, &id, &slug, payload)
+    let todo = db
+        .update_todo(&id, &slug, payload)
         .await?
         .ok_or_else(|| {
             tracing::warn!(todo.id = %id, "todo not found for update");
@@ -219,17 +219,17 @@ pub async fn update_todo(
 #[tracing::instrument(skip_all, fields(todo.id = %id))]
 pub async fn delete_todo(
     OptionalAuthSession(user): OptionalAuthSession,
-    State(pool): State<PgPool>,
+    State(db): State<Database>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     user.ok_or(AppError::Unauthorized)?;
 
-    if db::todos::get_by_id(&pool, &id).await?.is_none() {
+    if db.get_todo_by_id(&id).await?.is_none() {
         tracing::warn!(todo.id = %id, "todo not found for delete");
         return Err(AppError::NotFound);
     }
 
-    db::todos::delete(&pool, &id).await?;
+    db.delete_todo(&id).await?;
     tracing::info!(todo.id = %id, "todo deleted");
     Ok(StatusCode::NO_CONTENT)
 }
