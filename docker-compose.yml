@@ -1,5 +1,5 @@
 services:
-  db:
+  database:
     image: postgres:17
     ports:
       - "5432:5432"
@@ -15,16 +15,18 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
 
-  app:
-    build: ./back-end
+  back-end:
+    build:
+      context: ./back-end
+      dockerfile: Dockerfile.dev
     ports:
       - "3000:3000"
     env_file:
       - ./back-end/.env
     environment:
-      DATABASE_URL: postgres://postgres:postgres@db:5432/todos
+      DATABASE_URL: postgres://postgres:postgres@database:5432/todos
     depends_on:
-      db:
+      database:
         condition: service_healthy
     volumes:
       - ./back-end/Cargo.toml:/app/Cargo.toml
@@ -33,6 +35,22 @@ services:
       - ./back-end/migrations:/app/migrations
       - cargo-registry:/usr/local/cargo/registry
       - target-cache:/app/target
+
+  front-end:
+    build:
+      context: ./front-end
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./front-end/src:/app/src
+      - ./front-end/static:/app/static
+      - ./front-end/svelte.config.js:/app/svelte.config.js
+      - ./front-end/vite.config.ts:/app/vite.config.ts
+      - ./front-end/tsconfig.json:/app/tsconfig.json
+      - ./front-end/orval.config.ts:/app/orval.config.ts
+    depends_on:
+      - back-end
 
 volumes:
   postgres-data:

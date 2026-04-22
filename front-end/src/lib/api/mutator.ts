@@ -6,6 +6,7 @@ export const customFetch = async <T>(
 
     const response = await fetch(`${baseUrl}${url}`, {
         ...options,
+        credentials: 'include',
         headers: {
             'Content-Type': 'application/json',
             ...options.headers,

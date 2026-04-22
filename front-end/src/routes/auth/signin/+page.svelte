@@ -1,9 +1,8 @@
 <script lang="ts">
-	import { createSignin } from '$lib/api/users/users';
-	import { browser } from '$app/environment';
+	import { createSignin } from '$lib/api/generated/users/users';
 
-	let email = '';
-	let password = '';
+	let email = $state('');
+	let password = $state('');
 
 	const signinMutation = createSignin();
 
@@ -12,8 +11,7 @@
 			{ data: { email, password } },
 			{
 				onSuccess: (res) => {
-					if (res.status === 200 && browser) {
-						localStorage.setItem('token', res.data.token);
+					if (res.status === 200) {
 						window.location.href = '/';
 					}
 				}
