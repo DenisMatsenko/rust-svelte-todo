@@ -16,6 +16,7 @@ export default defineConfig({
                     name: 'customFetch',
                 },
             },
+            clean: true,
         },
     },
 });

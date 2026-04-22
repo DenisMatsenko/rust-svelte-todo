@@ -21,10 +21,9 @@ import type {
 } from '@tanstack/svelte-query';
 
 import type {
+  CreateUser,
   ErrorResponse,
-  SigninUser,
-  SignupUser,
-  Token,
+  UpdateUser,
   User
 } from '../rustSvelteTodo.schemas';
 
@@ -36,227 +35,42 @@ type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 
 /**
- * Authenticates an existing user with their email and password, and returns a JWT token.
-
-The token can be used in the `Authorization: Bearer <token>` header to access protected endpoints.
- * @summary Sign in
- */
-export type signinResponse200 = {
-  data: Token
-  status: 200
-}
-
-export type signinResponse401 = {
-  data: ErrorResponse
-  status: 401
-}
-
-export type signinResponseSuccess = (signinResponse200) & {
-  headers: Headers;
-};
-export type signinResponseError = (signinResponse401) & {
-  headers: Headers;
-};
-
-export type signinResponse = (signinResponseSuccess | signinResponseError)
-
-export const getSigninUrl = () => {
-
-
-
-
-  return `/auth/signin`
-}
-
-export const signin = async (signinUser: SigninUser, options?: RequestInit): Promise<signinResponse> => {
-
-  return customFetch<signinResponse>(getSigninUrl(),
-  {
-    ...options,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-    body: JSON.stringify(
-      signinUser,)
-  }
-);}
-
-
-
-
-export const getSigninMutationOptions = <TError = ErrorResponse,
-    TContext = unknown>(options?: { mutation?:CreateMutationOptions<Awaited<ReturnType<typeof signin>>, TError,{data: SigninUser}, TContext>, request?: SecondParameter<typeof customFetch>}
-): CreateMutationOptions<Awaited<ReturnType<typeof signin>>, TError,{data: SigninUser}, TContext> => {
-
-const mutationKey = ['signin'];
-const {mutation: mutationOptions, request: requestOptions} = options ?
-      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
-      options
-      : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }, request: undefined};
-
-
-
-
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof signin>>, {data: SigninUser}> = (props) => {
-          const {data} = props ?? {};
-
-          return  signin(data,requestOptions)
-        }
-
-
-
-
-
-
-  return  { mutationFn, ...mutationOptions }}
-
-    export type SigninMutationResult = NonNullable<Awaited<ReturnType<typeof signin>>>
-    export type SigninMutationBody = SigninUser
-    export type SigninMutationError = ErrorResponse
-
-    /**
- * @summary Sign in
- */
-export const createSignin = <TError = ErrorResponse,
-    TContext = unknown>(options?: () => { mutation?:CreateMutationOptions<Awaited<ReturnType<typeof signin>>, TError,{data: SigninUser}, TContext>, request?: SecondParameter<typeof customFetch>}
- , queryClient?: () => QueryClient): CreateMutationResult<
-        Awaited<ReturnType<typeof signin>>,
-        TError,
-        {data: SigninUser},
-        TContext
-      > => {
-      return createMutation(() => ({ ...getSigninMutationOptions(options?.()) }), queryClient);
-    }
-    /**
- * Creates a new user account and returns a JWT token.
-
-A unique slug is generated from the user's full name. If a slug collision occurs,
-it will attempt to generate a new slug up to 3 times before returning a conflict error.
- * @summary Sign up
- */
-export type signupResponse201 = {
-  data: Token
-  status: 201
-}
-
-export type signupResponse409 = {
-  data: ErrorResponse
-  status: 409
-}
-
-export type signupResponseSuccess = (signupResponse201) & {
-  headers: Headers;
-};
-export type signupResponseError = (signupResponse409) & {
-  headers: Headers;
-};
-
-export type signupResponse = (signupResponseSuccess | signupResponseError)
-
-export const getSignupUrl = () => {
-
-
-
-
-  return `/auth/signup`
-}
-
-export const signup = async (signupUser: SignupUser, options?: RequestInit): Promise<signupResponse> => {
-
-  return customFetch<signupResponse>(getSignupUrl(),
-  {
-    ...options,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-    body: JSON.stringify(
-      signupUser,)
-  }
-);}
-
-
-
-
-export const getSignupMutationOptions = <TError = ErrorResponse,
-    TContext = unknown>(options?: { mutation?:CreateMutationOptions<Awaited<ReturnType<typeof signup>>, TError,{data: SignupUser}, TContext>, request?: SecondParameter<typeof customFetch>}
-): CreateMutationOptions<Awaited<ReturnType<typeof signup>>, TError,{data: SignupUser}, TContext> => {
-
-const mutationKey = ['signup'];
-const {mutation: mutationOptions, request: requestOptions} = options ?
-      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
-      options
-      : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }, request: undefined};
-
-
-
-
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof signup>>, {data: SignupUser}> = (props) => {
-          const {data} = props ?? {};
-
-          return  signup(data,requestOptions)
-        }
-
-
-
-
-
-
-  return  { mutationFn, ...mutationOptions }}
-
-    export type SignupMutationResult = NonNullable<Awaited<ReturnType<typeof signup>>>
-    export type SignupMutationBody = SignupUser
-    export type SignupMutationError = ErrorResponse
-
-    /**
- * @summary Sign up
- */
-export const createSignup = <TError = ErrorResponse,
-    TContext = unknown>(options?: () => { mutation?:CreateMutationOptions<Awaited<ReturnType<typeof signup>>, TError,{data: SignupUser}, TContext>, request?: SecondParameter<typeof customFetch>}
- , queryClient?: () => QueryClient): CreateMutationResult<
-        Awaited<ReturnType<typeof signup>>,
-        TError,
-        {data: SignupUser},
-        TContext
-      > => {
-      return createMutation(() => ({ ...getSignupMutationOptions(options?.()) }), queryClient);
-    }
-    /**
- * Returns the profile of the currently authenticated user.
+ * Returns all users in the database.
 
 The request must include a valid Bearer token in the Authorization header for authentication
 (use the `/auth/signup` or `/auth/signin` endpoint to obtain a token).
- * @summary Get current user
+ * @summary List all users
  */
-export type meResponse200 = {
-  data: User
+export type listUsersResponse200 = {
+  data: User[]
   status: 200
 }
 
-export type meResponse401 = {
+export type listUsersResponse401 = {
   data: ErrorResponse
   status: 401
 }
 
-export type meResponseSuccess = (meResponse200) & {
+export type listUsersResponseSuccess = (listUsersResponse200) & {
   headers: Headers;
 };
-export type meResponseError = (meResponse401) & {
+export type listUsersResponseError = (listUsersResponse401) & {
   headers: Headers;
 };
 
-export type meResponse = (meResponseSuccess | meResponseError)
+export type listUsersResponse = (listUsersResponseSuccess | listUsersResponseError)
 
-export const getMeUrl = () => {
-
-
+export const getListUsersUrl = () => {
 
 
-  return `/users/me`
+
+
+  return `/users`
 }
 
-export const me = async ( options?: RequestInit): Promise<meResponse> => {
+export const listUsers = async ( options?: RequestInit): Promise<listUsersResponse> => {
 
-  return customFetch<meResponse>(getMeUrl(),
+  return customFetch<listUsersResponse>(getListUsersUrl(),
   {
     ...options,
     method: 'GET'
@@ -269,47 +83,47 @@ export const me = async ( options?: RequestInit): Promise<meResponse> => {
 
 
 
-export const getMeQueryKey = () => {
+export const getListUsersQueryKey = () => {
     return [
-    `/users/me`
+    `/users`
     ] as const;
     }
 
 
-export const getMeQueryOptions = <TData = Awaited<ReturnType<typeof me>>, TError = ErrorResponse>( options?: { query?:Partial<CreateQueryOptions<Awaited<ReturnType<typeof me>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+export const getListUsersQueryOptions = <TData = Awaited<ReturnType<typeof listUsers>>, TError = ErrorResponse>( options?: { query?:Partial<CreateQueryOptions<Awaited<ReturnType<typeof listUsers>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
 
-  const queryKey =  queryOptions?.queryKey ?? getMeQueryKey();
+  const queryKey =  queryOptions?.queryKey ?? getListUsersQueryKey();
 
 
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof me>>> = ({ signal }) => me({ signal, ...requestOptions });
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listUsers>>> = ({ signal }) => listUsers({ signal, ...requestOptions });
 
 
 
 
 
-   return  { queryKey, queryFn, ...queryOptions} as CreateQueryOptions<Awaited<ReturnType<typeof me>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+   return  { queryKey, queryFn, ...queryOptions} as CreateQueryOptions<Awaited<ReturnType<typeof listUsers>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
 }
 
-export type MeQueryResult = NonNullable<Awaited<ReturnType<typeof me>>>
-export type MeQueryError = ErrorResponse
+export type ListUsersQueryResult = NonNullable<Awaited<ReturnType<typeof listUsers>>>
+export type ListUsersQueryError = ErrorResponse
 
 
 /**
- * @summary Get current user
+ * @summary List all users
  */
 
-export function createMe<TData = Awaited<ReturnType<typeof me>>, TError = ErrorResponse>(
-  options?: () => { query?:Partial<CreateQueryOptions<Awaited<ReturnType<typeof me>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+export function createListUsers<TData = Awaited<ReturnType<typeof listUsers>>, TError = ErrorResponse>(
+  options?: () => { query?:Partial<CreateQueryOptions<Awaited<ReturnType<typeof listUsers>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
  , queryClient?: () => QueryClient
  ): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
 
 
-  const query = createQuery(() => getMeQueryOptions(options?.()), queryClient) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+  const query = createQuery(() => getListUsersQueryOptions(options?.()), queryClient) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 
   return query
 }
@@ -319,3 +133,411 @@ export function createMe<TData = Awaited<ReturnType<typeof me>>, TError = ErrorR
 
 
 
+/**
+ * Creates a new user with a unique slug generated from the full name.
+
+If a slug collision occurs, it will attempt to generate a new slug up to 3 times
+before returning a conflict error.
+
+The request must include a valid Bearer token in the Authorization header for authentication
+(use the `/auth/signup` or `/auth/signin` endpoint to obtain a token).
+ * @summary Create a new user
+ */
+export type createUserResponse201 = {
+  data: User
+  status: 201
+}
+
+export type createUserResponse401 = {
+  data: ErrorResponse
+  status: 401
+}
+
+export type createUserResponse409 = {
+  data: ErrorResponse
+  status: 409
+}
+
+export type createUserResponseSuccess = (createUserResponse201) & {
+  headers: Headers;
+};
+export type createUserResponseError = (createUserResponse401 | createUserResponse409) & {
+  headers: Headers;
+};
+
+export type createUserResponse = (createUserResponseSuccess | createUserResponseError)
+
+export const getCreateUserUrl = () => {
+
+
+
+
+  return `/users`
+}
+
+export const createUser = async (createUser: CreateUser, options?: RequestInit): Promise<createUserResponse> => {
+
+  return customFetch<createUserResponse>(getCreateUserUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      createUser,)
+  }
+);}
+
+
+
+
+export const getCreateUserMutationOptions = <TError = ErrorResponse,
+    TContext = unknown>(options?: { mutation?:CreateMutationOptions<Awaited<ReturnType<typeof createUser>>, TError,{data: CreateUser}, TContext>, request?: SecondParameter<typeof customFetch>}
+): CreateMutationOptions<Awaited<ReturnType<typeof createUser>>, TError,{data: CreateUser}, TContext> => {
+
+const mutationKey = ['createUser'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createUser>>, {data: CreateUser}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createUser(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateUserMutationResult = NonNullable<Awaited<ReturnType<typeof createUser>>>
+    export type CreateUserMutationBody = CreateUser
+    export type CreateUserMutationError = ErrorResponse
+
+    /**
+ * @summary Create a new user
+ */
+export const createCreateUser = <TError = ErrorResponse,
+    TContext = unknown>(options?: () => { mutation?:CreateMutationOptions<Awaited<ReturnType<typeof createUser>>, TError,{data: CreateUser}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: () => QueryClient): CreateMutationResult<
+        Awaited<ReturnType<typeof createUser>>,
+        TError,
+        {data: CreateUser},
+        TContext
+      > => {
+      return createMutation(() => ({ ...getCreateUserMutationOptions(options?.()) }), queryClient);
+    }
+    /**
+ * Returns a single user identified by its ID.
+
+The request must include a valid Bearer token in the Authorization header for authentication
+(use the `/auth/signup` or `/auth/signin` endpoint to obtain a token).
+ * @summary Get a user by ID
+ */
+export type getUserResponse200 = {
+  data: User
+  status: 200
+}
+
+export type getUserResponse401 = {
+  data: ErrorResponse
+  status: 401
+}
+
+export type getUserResponse404 = {
+  data: ErrorResponse
+  status: 404
+}
+
+export type getUserResponseSuccess = (getUserResponse200) & {
+  headers: Headers;
+};
+export type getUserResponseError = (getUserResponse401 | getUserResponse404) & {
+  headers: Headers;
+};
+
+export type getUserResponse = (getUserResponseSuccess | getUserResponseError)
+
+export const getGetUserUrl = (id: string,) => {
+
+
+
+
+  return `/users/${id}`
+}
+
+export const getUser = async (id: string, options?: RequestInit): Promise<getUserResponse> => {
+
+  return customFetch<getUserResponse>(getGetUserUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetUserQueryKey = (id: string,) => {
+    return [
+    `/users/${id}`
+    ] as const;
+    }
+
+
+export const getGetUserQueryOptions = <TData = Awaited<ReturnType<typeof getUser>>, TError = ErrorResponse>(id: string, options?: { query?:Partial<CreateQueryOptions<Awaited<ReturnType<typeof getUser>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetUserQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getUser>>> = ({ signal }) => getUser(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: !!(id), ...queryOptions} as CreateQueryOptions<Awaited<ReturnType<typeof getUser>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetUserQueryResult = NonNullable<Awaited<ReturnType<typeof getUser>>>
+export type GetUserQueryError = ErrorResponse
+
+
+/**
+ * @summary Get a user by ID
+ */
+
+export function createGetUser<TData = Awaited<ReturnType<typeof getUser>>, TError = ErrorResponse>(
+ id: () =>  string, options?: () => { query?:Partial<CreateQueryOptions<Awaited<ReturnType<typeof getUser>>, TError, TData>>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: () => QueryClient
+ ): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+
+
+  const query = createQuery(() => getGetUserQueryOptions(id(),options?.()), queryClient) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return query
+}
+
+
+
+
+
+
+/**
+ * Updates the full name, email, and role of an existing user.
+The slug is regenerated from the new full name. If a slug collision occurs, it will
+attempt to generate a new slug up to 3 times before returning a conflict error.
+
+The request must include a valid Bearer token in the Authorization header for authentication
+(use the `/auth/signup` or `/auth/signin` endpoint to obtain a token).
+ * @summary Update a user
+ */
+export type updateUserResponse200 = {
+  data: User
+  status: 200
+}
+
+export type updateUserResponse401 = {
+  data: ErrorResponse
+  status: 401
+}
+
+export type updateUserResponse404 = {
+  data: ErrorResponse
+  status: 404
+}
+
+export type updateUserResponse409 = {
+  data: ErrorResponse
+  status: 409
+}
+
+export type updateUserResponseSuccess = (updateUserResponse200) & {
+  headers: Headers;
+};
+export type updateUserResponseError = (updateUserResponse401 | updateUserResponse404 | updateUserResponse409) & {
+  headers: Headers;
+};
+
+export type updateUserResponse = (updateUserResponseSuccess | updateUserResponseError)
+
+export const getUpdateUserUrl = (id: string,) => {
+
+
+
+
+  return `/users/${id}`
+}
+
+export const updateUser = async (id: string,
+    updateUser: UpdateUser, options?: RequestInit): Promise<updateUserResponse> => {
+
+  return customFetch<updateUserResponse>(getUpdateUserUrl(id),
+  {
+    ...options,
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      updateUser,)
+  }
+);}
+
+
+
+
+export const getUpdateUserMutationOptions = <TError = ErrorResponse,
+    TContext = unknown>(options?: { mutation?:CreateMutationOptions<Awaited<ReturnType<typeof updateUser>>, TError,{id: string;data: UpdateUser}, TContext>, request?: SecondParameter<typeof customFetch>}
+): CreateMutationOptions<Awaited<ReturnType<typeof updateUser>>, TError,{id: string;data: UpdateUser}, TContext> => {
+
+const mutationKey = ['updateUser'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateUser>>, {id: string;data: UpdateUser}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  updateUser(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UpdateUserMutationResult = NonNullable<Awaited<ReturnType<typeof updateUser>>>
+    export type UpdateUserMutationBody = UpdateUser
+    export type UpdateUserMutationError = ErrorResponse
+
+    /**
+ * @summary Update a user
+ */
+export const createUpdateUser = <TError = ErrorResponse,
+    TContext = unknown>(options?: () => { mutation?:CreateMutationOptions<Awaited<ReturnType<typeof updateUser>>, TError,{id: string;data: UpdateUser}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: () => QueryClient): CreateMutationResult<
+        Awaited<ReturnType<typeof updateUser>>,
+        TError,
+        {id: string;data: UpdateUser},
+        TContext
+      > => {
+      return createMutation(() => ({ ...getUpdateUserMutationOptions(options?.()) }), queryClient);
+    }
+    /**
+ * Deletes a user identified by its ID. Returns 204 No Content on success.
+
+The request must include a valid Bearer token in the Authorization header for authentication
+(use the `/auth/signup` or `/auth/signin` endpoint to obtain a token).
+ * @summary Delete user
+ */
+export type deleteUserResponse204 = {
+  data: void
+  status: 204
+}
+
+export type deleteUserResponse401 = {
+  data: ErrorResponse
+  status: 401
+}
+
+export type deleteUserResponse404 = {
+  data: ErrorResponse
+  status: 404
+}
+
+export type deleteUserResponseSuccess = (deleteUserResponse204) & {
+  headers: Headers;
+};
+export type deleteUserResponseError = (deleteUserResponse401 | deleteUserResponse404) & {
+  headers: Headers;
+};
+
+export type deleteUserResponse = (deleteUserResponseSuccess | deleteUserResponseError)
+
+export const getDeleteUserUrl = (id: string,) => {
+
+
+
+
+  return `/users/${id}`
+}
+
+export const deleteUser = async (id: string, options?: RequestInit): Promise<deleteUserResponse> => {
+
+  return customFetch<deleteUserResponse>(getDeleteUserUrl(id),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+export const getDeleteUserMutationOptions = <TError = ErrorResponse,
+    TContext = unknown>(options?: { mutation?:CreateMutationOptions<Awaited<ReturnType<typeof deleteUser>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+): CreateMutationOptions<Awaited<ReturnType<typeof deleteUser>>, TError,{id: string}, TContext> => {
+
+const mutationKey = ['deleteUser'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteUser>>, {id: string}> = (props) => {
+          const {id} = props ?? {};
+
+          return  deleteUser(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteUserMutationResult = NonNullable<Awaited<ReturnType<typeof deleteUser>>>
+
+    export type DeleteUserMutationError = ErrorResponse
+
+    /**
+ * @summary Delete user
+ */
+export const createDeleteUser = <TError = ErrorResponse,
+    TContext = unknown>(options?: () => { mutation?:CreateMutationOptions<Awaited<ReturnType<typeof deleteUser>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+ , queryClient?: () => QueryClient): CreateMutationResult<
+        Awaited<ReturnType<typeof deleteUser>>,
+        TError,
+        {id: string},
+        TContext
+      > => {
+      return createMutation(() => ({ ...getDeleteUserMutationOptions(options?.()) }), queryClient);
+    }

@@ -25,10 +25,15 @@ async fn main() {
         .await
         .expect("Failed to connect to database");
 
-    sqlx::migrate!("./migrations")
+    let migrator = sqlx::migrate!("./migrations");
+    for migration in migrator.migrations.iter() {
+        tracing::debug!(version = migration.version, description = %migration.description, "migration registered");
+    }
+    migrator
         .run(&pool)
         .await
         .expect("Failed to run migrations");
+    tracing::info!("migrations applied successfully");
 
     let db = db::DatabaseService::new(pool);
     let auth = auth::AuthService::new(db.clone(), config.jwt_secret);

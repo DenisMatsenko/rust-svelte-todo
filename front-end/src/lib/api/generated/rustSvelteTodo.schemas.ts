@@ -9,18 +9,28 @@ export interface CreateTodo {
   title: string;
 }
 
+export type UserRole = typeof UserRole[keyof typeof UserRole];
+
+
+export const UserRole = {
+  admin: 'admin',
+  editor: 'editor',
+  viewer: 'viewer',
+} as const;
+
+export interface CreateUser {
+  email: string;
+  full_name: string;
+  password: string;
+  role: UserRole;
+}
+
 export interface ErrorResponse {
   error: string;
 }
 
 export interface SigninUser {
   email: string;
-  password: string;
-}
-
-export interface SignupUser {
-  email: string;
-  full_name: string;
   password: string;
 }
 
@@ -42,10 +52,16 @@ export interface UpdateTodo {
   title: string;
 }
 
+export interface UpdateUser {
+  full_name: string;
+  role: UserRole;
+}
+
 export interface User {
   email: string;
   full_name: string;
   id: string;
+  role: UserRole;
   slug: string;
 }
 

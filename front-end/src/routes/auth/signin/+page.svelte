@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { createSignin } from '$lib/api/generated/users/users';
+	import { createSignin } from '$lib/api/generated/auth/auth';
 
 	let email = $state('');
 	let password = $state('');
@@ -10,7 +10,7 @@
 		signinMutation.mutate(
 			{ data: { email, password } },
 			{
-				onSuccess: (res) => {
+				onSuccess: (res: { status: number }) => {
 					if (res.status === 200) {
 						window.location.href = '/';
 					}

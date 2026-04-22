@@ -63,6 +63,22 @@ impl DatabaseService {
         Ok(todo)
     }
 
+    pub async fn get_todo_by_slug_excluding_id(
+        &self,
+        slug: &str,
+        id: &str,
+    ) -> Result<Option<Todo>, AppError> {
+        let todo = sqlx::query_as!(
+            Todo,
+            "SELECT * FROM todos WHERE slug = $1 AND id != $2",
+            slug,
+            id,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(todo)
+    }
+
     pub async fn delete_todo(&self, id: &str) -> Result<(), AppError> {
         sqlx::query!("DELETE FROM todos WHERE id = $1", id)
             .execute(&self.pool)

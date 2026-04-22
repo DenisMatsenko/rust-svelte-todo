@@ -169,7 +169,7 @@ pub async fn update_todo(
 
     let mut slug = slugify(&payload.title);
     for attempt in 0..3 {
-        if db.get_todo_by_slug(&slug).await?.is_some() {
+        if db.get_todo_by_slug_excluding_id(&slug, &id).await?.is_some() {
             if attempt == 2 {
                 tracing::warn!(todo.id = %id, slug = %slug, "slug collision after 3 attempts");
                 return Err(AppError::Conflict(

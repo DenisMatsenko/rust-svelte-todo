@@ -1,51 +1,91 @@
 use crate::{
-    auth::{AuthService, OptionalAuthSession, clear_auth_cookie, make_auth_cookie},
+    auth::OptionalAuthSession,
     db::DatabaseService,
     error::AppError,
-    models::{SigninUser, SignupUser, Token, User},
+    models::{CreateUser, UpdateUser, User},
 };
 use argon2::{
-    Argon2,
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
+    Argon2, PasswordHasher,
+    password_hash::{SaltString, rand_core::OsRng},
 };
-use axum::{Json, extract::State, http::StatusCode};
-use axum_extra::extract::cookie::CookieJar;
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+};
 use slug::slugify;
 use ulid::Ulid;
 
-/// Sign up
+/// List all users
 ///
-/// Creates a new user account and returns a JWT token and sets an `auth_token` HttpOnly cookie.
+/// Returns all users in the database.
 ///
-/// A unique slug is generated from the user's full name. If a slug collision occurs,
-/// it will attempt to generate a new slug up to 3 times before returning a conflict error.
+/// The request must include a valid Bearer token in the Authorization header for authentication
+/// (use the `/auth/signup` or `/auth/signin` endpoint to obtain a token).
 #[utoipa::path(
-    post,
-    path = "/auth/signup",
-    request_body = SignupUser,
+    get,
+    path = "/users",
+    params(
+        ("Authorization" = String, Header, description = "Bearer access token. Format: `Bearer <token>`")
+    ),
+    security(("bearerAuth" = [])),
     responses(
-        (status = 201, description = "User created, returns JWT token", body = Token),
-        (status = 409, description = "Email already in use", body = crate::error::ErrorResponse),
+        (status = 200, description = "List of users", body = Vec<User>),
+        (status = 401, description = "Unauthorized", body = crate::error::ErrorResponse),
     ),
     tag = "Users"
 )]
 #[tracing::instrument(skip_all)]
-pub async fn signup(
-    State(auth): State<AuthService>,
+pub async fn list_users(
+    OptionalAuthSession(user): OptionalAuthSession,
     State(db): State<DatabaseService>,
-    jar: CookieJar,
-    Json(payload): Json<SignupUser>,
-) -> Result<(StatusCode, CookieJar, Json<Token>), AppError> {
-    if db.get_user_by_email(&payload.email).await?.is_some() {
-        tracing::warn!(email = %payload.email, "signup with already-used email");
-        return Err(AppError::Conflict("email already in use".to_owned()));
-    }
+) -> Result<Json<Vec<User>>, AppError> {
+    user.ok_or(AppError::Unauthorized)?;
+
+    let users = db.list_users().await?;
+    tracing::debug!(count = users.len(), "listed users");
+    Ok(Json(users))
+}
+
+/// Create a new user
+///
+/// Creates a new user with a unique slug generated from the full name.
+///
+/// If a slug collision occurs, it will attempt to generate a new slug up to 3 times
+/// before returning a conflict error.
+///
+/// The request must include a valid Bearer token in the Authorization header for authentication
+/// (use the `/auth/signup` or `/auth/signin` endpoint to obtain a token).
+#[utoipa::path(
+    post,
+    path = "/users",
+    request_body = CreateUser,
+    params(
+        ("Authorization" = String, Header, description = "Bearer access token. Format: `Bearer <token>`")
+    ),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = 201, description = "User created", body = User),
+        (status = 401, description = "Unauthorized", body = crate::error::ErrorResponse),
+        (status = 409, description = "Slug already exists", body = crate::error::ErrorResponse),
+    ),
+    tag = "Users"
+)]
+#[tracing::instrument(skip_all)]
+pub async fn create_user(
+    OptionalAuthSession(user): OptionalAuthSession,
+    State(db): State<DatabaseService>,
+    Json(payload): Json<CreateUser>,
+) -> Result<(StatusCode, Json<User>), AppError> {
+    user.ok_or(AppError::Unauthorized)?;
+
+    let id = Ulid::new().to_string();
 
     let mut slug = slugify(&payload.full_name);
     for attempt in 0..3 {
         if db.get_user_by_slug(&slug).await?.is_some() {
             if attempt == 2 {
-                tracing::warn!(slug = %slug, "slug collision after 3 attempts during signup");
+                tracing::warn!(slug = %slug, "slug collision after 3 attempts");
                 return Err(AppError::Conflict(
                     "failed to generate unique slug after 3 attempts".to_owned(),
                 ));
@@ -57,107 +97,163 @@ pub async fn signup(
         }
     }
 
-    let id = Ulid::new().to_string();
     let salt = SaltString::generate(&mut OsRng);
     let password_hash = Argon2::default()
         .hash_password(payload.password.as_bytes(), &salt)?
         .to_string();
 
-    db.create_user(
-        &id,
-        &slug,
-        &payload.full_name,
-        &payload.email,
-        &password_hash,
-    )
-    .await?;
-
-    tracing::info!(user.id = %id, user.email = %payload.email, "user signed up");
-    let token = auth.encode_jwt(&id)?;
-    let jar = jar.add(make_auth_cookie(token.clone()));
-    Ok((StatusCode::CREATED, jar, Json(Token { token })))
+    let user = db
+        .create_user(
+            &id,
+            &slug,
+            &payload.full_name,
+            &payload.email,
+            &password_hash,
+            payload.role,
+        )
+        .await?;
+    tracing::info!(user.id = %user.id, user.slug = %user.slug, "user created");
+    Ok((StatusCode::CREATED, Json(user)))
 }
 
-/// Sign in
+/// Get a user by ID
 ///
-/// Authenticates an existing user and sets an `auth_token` HttpOnly cookie.
+/// Returns a single user identified by its ID.
 ///
-/// The cookie is used automatically for subsequent requests. The token is also returned
-/// in the response body for clients that prefer the `Authorization: Bearer` header.
-#[utoipa::path(
-    post,
-    path = "/auth/signin",
-    request_body = SigninUser,
-    responses(
-        (status = 200, description = "Authenticated, returns JWT token", body = Token),
-        (status = 401, description = "Invalid email or password", body = crate::error::ErrorResponse),
-    ),
-    tag = "Users"
-)]
-#[tracing::instrument(skip_all)]
-pub async fn signin(
-    State(auth): State<AuthService>,
-    State(db): State<DatabaseService>,
-    jar: CookieJar,
-    Json(payload): Json<SigninUser>,
-) -> Result<(CookieJar, Json<Token>), AppError> {
-    let user = db.get_user_by_email(&payload.email).await?.ok_or_else(|| {
-        tracing::warn!(email = %payload.email, "signin attempt for unknown email");
-        AppError::Unauthorized
-    })?;
-
-    let parsed_hash = PasswordHash::new(&user.password)?;
-    if Argon2::default()
-        .verify_password(payload.password.as_bytes(), &parsed_hash)
-        .is_err()
-    {
-        tracing::warn!(user.id = %user.id, "invalid password on signin");
-        return Err(AppError::Unauthorized);
-    }
-
-    tracing::info!(user.id = %user.id, "user signed in");
-    let token = auth.encode_jwt(&user.id)?;
-    let jar = jar.add(make_auth_cookie(token.clone()));
-    Ok((jar, Json(Token { token })))
-}
-
-/// Get current user
-///
-/// Returns the profile of the currently authenticated user.
-///
-/// Authentication is accepted via `auth_token` cookie (preferred) or
-/// `Authorization: Bearer <token>` header.
+/// The request must include a valid Bearer token in the Authorization header for authentication
+/// (use the `/auth/signup` or `/auth/signin` endpoint to obtain a token).
 #[utoipa::path(
     get,
-    path = "/users/me",
+    path = "/users/{id}",
+    params(
+        ("id" = String, Path, description = "The user ID"),
+        ("Authorization" = String, Header, description = "Bearer access token. Format: `Bearer <token>`")
+    ),
     security(("bearerAuth" = [])),
     responses(
-        (status = 200, description = "Current user profile", body = User),
+        (status = 200, description = "User found", body = User),
         (status = 401, description = "Unauthorized", body = crate::error::ErrorResponse),
+        (status = 404, description = "User not found", body = crate::error::ErrorResponse),
     ),
     tag = "Users"
 )]
-#[tracing::instrument(skip_all)]
-pub async fn me(OptionalAuthSession(user): OptionalAuthSession) -> Result<Json<User>, AppError> {
-    let user = user.ok_or(AppError::Unauthorized)?;
-    tracing::debug!(user.id = %user.id, "fetched current user");
+#[tracing::instrument(skip_all, fields(user.id = %id))]
+pub async fn get_user(
+    OptionalAuthSession(user): OptionalAuthSession,
+    State(db): State<DatabaseService>,
+    Path(id): Path<String>,
+) -> Result<Json<User>, AppError> {
+    user.ok_or(AppError::Unauthorized)?;
+
+    let user = db.get_user_by_id(&id).await?.ok_or_else(|| {
+        tracing::warn!(user.id = %id, "user not found");
+        AppError::NotFound
+    })?;
+
     Ok(Json(user))
 }
 
-/// Logout
+/// Update a user
 ///
-/// Clears the `auth_token` cookie.
+/// Updates the full name, email, and role of an existing user.
+/// The slug is regenerated from the new full name. If a slug collision occurs, it will
+/// attempt to generate a new slug up to 3 times before returning a conflict error.
+///
+/// The request must include a valid Bearer token in the Authorization header for authentication
+/// (use the `/auth/signup` or `/auth/signin` endpoint to obtain a token).
 #[utoipa::path(
-    post,
-    path = "/auth/logout",
+    put,
+    path = "/users/{id}",
+    request_body = UpdateUser,
+    params(
+        ("id" = String, Path, description = "The user ID"),
+        ("Authorization" = String, Header, description = "Bearer access token. Format: `Bearer <token>`")
+    ),
+    security(("bearerAuth" = [])),
     responses(
-        (status = 204, description = "Logged out, cookie cleared"),
+        (status = 200, description = "User updated", body = User),
+        (status = 401, description = "Unauthorized", body = crate::error::ErrorResponse),
+        (status = 404, description = "User not found", body = crate::error::ErrorResponse),
+        (status = 409, description = "Slug already exists", body = crate::error::ErrorResponse),
     ),
     tag = "Users"
 )]
-#[tracing::instrument(skip_all)]
-pub async fn logout(jar: CookieJar) -> (StatusCode, CookieJar) {
-    let jar = jar.remove(clear_auth_cookie());
-    tracing::info!("user logged out");
-    (StatusCode::NO_CONTENT, jar)
+#[tracing::instrument(skip_all, fields(user.id = %id))]
+pub async fn update_user(
+    OptionalAuthSession(user): OptionalAuthSession,
+    State(db): State<DatabaseService>,
+    Path(id): Path<String>,
+    Json(payload): Json<UpdateUser>,
+) -> Result<Json<User>, AppError> {
+    user.ok_or(AppError::Unauthorized)?;
+
+    let mut slug = slugify(&payload.full_name);
+    for attempt in 0..3 {
+        if db
+            .get_user_by_slug_excluding_id(&slug, &id)
+            .await?
+            .is_some()
+        {
+            if attempt == 2 {
+                tracing::warn!(user.id = %id, slug = %slug, "slug collision after 3 attempts");
+                return Err(AppError::Conflict(
+                    "failed to generate unique slug after 3 attempts".to_owned(),
+                ));
+            }
+            let suffix = &Ulid::new().to_string()[20..];
+            slug = format!("{slug}-{suffix}");
+        } else {
+            break;
+        }
+    }
+
+    let user = db
+        .update_user(&id, &slug, &payload.full_name, payload.role)
+        .await?
+        .ok_or_else(|| {
+            tracing::warn!(user.id = %id, "user not found for update");
+            AppError::NotFound
+        })?;
+
+    tracing::info!(user.id = %user.id, user.slug = %user.slug, "user updated");
+    Ok(Json(user))
+}
+
+/// Delete user
+///
+/// Deletes a user identified by its ID. Returns 204 No Content on success.
+///
+/// The request must include a valid Bearer token in the Authorization header for authentication
+/// (use the `/auth/signup` or `/auth/signin` endpoint to obtain a token).
+#[utoipa::path(
+    delete,
+    path = "/users/{id}",
+    params(
+        ("id" = String, Path, description = "The user ID"),
+        ("Authorization" = String, Header, description = "Bearer access token. Format: `Bearer <token>`")
+    ),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = 204, description = "User deleted"),
+        (status = 401, description = "Unauthorized", body = crate::error::ErrorResponse),
+        (status = 404, description = "User not found", body = crate::error::ErrorResponse),
+    ),
+    tag = "Users"
+)]
+#[tracing::instrument(skip_all, fields(user.id = %id))]
+pub async fn delete_user(
+    OptionalAuthSession(user): OptionalAuthSession,
+    State(db): State<DatabaseService>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    user.ok_or(AppError::Unauthorized)?;
+
+    if db.get_user_by_id(&id).await?.is_none() {
+        tracing::warn!(user.id = %id, "user not found for delete");
+        return Err(AppError::NotFound);
+    }
+
+    db.delete_user(&id).await?;
+    tracing::info!(user.id = %id, "user deleted");
+    Ok(StatusCode::NO_CONTENT)
 }

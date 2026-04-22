@@ -1,7 +1,12 @@
+pub mod auth;
 pub mod todos;
 pub mod users;
 
-use axum::{Router, extract::FromRef, http::{HeaderValue, Method, header}};
+use axum::{
+    Router,
+    extract::FromRef,
+    http::{HeaderValue, Method, header},
+};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use utoipa::{
     OpenApi,
@@ -16,8 +21,9 @@ use crate::{auth::AuthService, db::DatabaseService};
 #[derive(OpenApi)]
 #[openapi(
     tags(
-        (name = "Todos", description = "Todo management"),
-        (name = "Users", description = "User management"),
+        (name = "Todos"),
+        (name = "Auth"),
+        (name = "Users"),
     ),
     modifiers(&SecurityAddon),
 )]
@@ -62,22 +68,37 @@ impl FromRef<AppState> for AuthService {
 
 pub fn build_router(db: DatabaseService, auth: AuthService) -> Router {
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
-        .routes(routes!(users::signup))
-        .routes(routes!(users::signin))
-        .routes(routes!(users::logout))
-        .routes(routes!(users::me))
+        .routes(routes!(auth::signin))
+        .routes(routes!(auth::me))
+        .routes(routes!(auth::signout))
         .routes(routes!(todos::list_todos, todos::create_todo))
         .routes(routes!(
             todos::get_todo,
             todos::update_todo,
             todos::delete_todo
         ))
+        .routes(routes!(users::list_users, users::create_user))
+        .routes(routes!(
+            users::get_user,
+            users::update_user,
+            users::delete_user
+        ))
         .with_state(AppState { db, auth })
         .split_for_parts();
 
     let cors = CorsLayer::new()
-        .allow_origin("http://localhost:3001".parse::<HeaderValue>().expect("valid origin"))
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
+        .allow_origin(
+            "http://localhost:3001"
+                .parse::<HeaderValue>()
+                .expect("valid origin"),
+        )
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
         .allow_credentials(true);
 
