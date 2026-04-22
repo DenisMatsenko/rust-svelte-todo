@@ -3,9 +3,9 @@ use crate::{
     models::{DBUser, User},
 };
 
-use super::Database;
+use super::DatabaseService;
 
-impl Database {
+impl DatabaseService {
     pub async fn get_user_by_id(&self, id: &str) -> Result<Option<User>, AppError> {
         let user = sqlx::query_as!(
             User,

@@ -29,8 +29,14 @@ pub struct Token {
 }
 
 #[derive(Deserialize, ToSchema)]
-pub struct CreateUser {
+pub struct SignupUser {
     pub full_name: String,
+    pub email: String,
+    pub password: String,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct SigninUser {
     pub email: String,
     pub password: String,
 }

@@ -4,9 +4,9 @@ use crate::{
 };
 use ulid::Ulid;
 
-use super::Database;
+use super::DatabaseService;
 
-impl Database {
+impl DatabaseService {
     pub async fn list_todos(&self) -> Result<Vec<Todo>, AppError> {
         let todos = sqlx::query_as!(Todo, "SELECT * FROM todos")
             .fetch_all(&self.pool)

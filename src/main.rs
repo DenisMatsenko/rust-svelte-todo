@@ -1,4 +1,5 @@
 mod auth;
+mod config;
 mod db;
 mod error;
 mod models;
@@ -16,9 +17,11 @@ async fn main() {
         )
         .init();
 
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let config = config::load_config()
+        .await
+        .expect("Failed to load configuration from environment");
 
-    let pool = sqlx::PgPool::connect(&database_url)
+    let pool = sqlx::PgPool::connect(&config.database_url)
         .await
         .expect("Failed to connect to database");
 
@@ -27,8 +30,9 @@ async fn main() {
         .await
         .expect("Failed to run migrations");
 
-    let db = db::Database::create(pool);
-    let app: axum::Router = routes::build_router(db);
+    let db = db::DatabaseService::new(pool);
+    let auth = auth::AuthService::new(db.clone(), config.jwt_secret);
+    let app: axum::Router = routes::build_router(db, auth);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
 

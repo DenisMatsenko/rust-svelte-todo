@@ -4,12 +4,12 @@ pub mod users;
 use sqlx::PgPool;
 
 #[derive(Clone)]
-pub struct Database {
+pub struct DatabaseService {
     pool: PgPool,
 }
 
-impl Database {
-    pub fn create(pool: PgPool) -> Self {
+impl DatabaseService {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }

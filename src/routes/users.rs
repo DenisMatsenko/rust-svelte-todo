@@ -1,18 +1,14 @@
 use crate::{
-    auth::{encode_jwt, OptionalAuthSession},
-    db::Database,
+    auth::{AuthService, OptionalAuthSession},
+    db::DatabaseService,
     error::AppError,
-    models::{CreateUser, Token, User},
+    models::{SigninUser, SignupUser, Token, User},
 };
 use argon2::{
     Argon2,
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
 };
-use axum::{
-    Json,
-    extract::State,
-    http::StatusCode,
-};
+use axum::{Json, extract::State, http::StatusCode};
 use slug::slugify;
 use ulid::Ulid;
 
@@ -25,17 +21,18 @@ use ulid::Ulid;
 #[utoipa::path(
     post,
     path = "/auth/signup",
-    request_body = CreateUser,
+    request_body = SignupUser,
     responses(
         (status = 201, description = "User created, returns JWT token", body = Token),
         (status = 409, description = "Email already in use", body = crate::error::ErrorResponse),
     ),
-    tag = "auth"
+    tag = "Users"
 )]
 #[tracing::instrument(skip_all)]
 pub async fn signup(
-    State(db): State<Database>,
-    Json(payload): Json<CreateUser>,
+    State(auth): State<AuthService>,
+    State(db): State<DatabaseService>,
+    Json(payload): Json<SignupUser>,
 ) -> Result<(StatusCode, Json<Token>), AppError> {
     if db.get_user_by_email(&payload.email).await?.is_some() {
         tracing::warn!(email = %payload.email, "signup with already-used email");
@@ -64,11 +61,22 @@ pub async fn signup(
         .hash_password(payload.password.as_bytes(), &salt)?
         .to_string();
 
-    db.create_user(&id, &slug, &payload.full_name, &payload.email, &password_hash)
-        .await?;
+    db.create_user(
+        &id,
+        &slug,
+        &payload.full_name,
+        &payload.email,
+        &password_hash,
+    )
+    .await?;
 
     tracing::info!(user.id = %id, user.email = %payload.email, "user signed up");
-    Ok((StatusCode::CREATED, Json(Token { token: encode_jwt(&id)? })))
+    Ok((
+        StatusCode::CREATED,
+        Json(Token {
+            token: auth.encode_jwt(&id)?,
+        }),
+    ))
 }
 
 /// Sign in
@@ -79,17 +87,18 @@ pub async fn signup(
 #[utoipa::path(
     post,
     path = "/auth/signin",
-    request_body = CreateUser,
+    request_body = SigninUser,
     responses(
         (status = 200, description = "Authenticated, returns JWT token", body = Token),
         (status = 401, description = "Invalid email or password", body = crate::error::ErrorResponse),
     ),
-    tag = "auth"
+    tag = "Users"
 )]
 #[tracing::instrument(skip_all)]
 pub async fn signin(
-    State(db): State<Database>,
-    Json(payload): Json<CreateUser>,
+    State(auth): State<AuthService>,
+    State(db): State<DatabaseService>,
+    Json(payload): Json<SigninUser>,
 ) -> Result<Json<Token>, AppError> {
     let user = db.get_user_by_email(&payload.email).await?.ok_or_else(|| {
         tracing::warn!(email = %payload.email, "signin attempt for unknown email");
@@ -107,7 +116,7 @@ pub async fn signin(
 
     tracing::info!(user.id = %user.id, "user signed in");
     Ok(Json(Token {
-        token: encode_jwt(&user.id)?,
+        token: auth.encode_jwt(&user.id)?,
     }))
 }
 
@@ -128,7 +137,7 @@ pub async fn signin(
         (status = 200, description = "Current user profile", body = User),
         (status = 401, description = "Unauthorized", body = crate::error::ErrorResponse),
     ),
-    tag = "users"
+    tag = "Users"
 )]
 #[tracing::instrument(skip_all)]
 pub async fn me(OptionalAuthSession(user): OptionalAuthSession) -> Result<Json<User>, AppError> {

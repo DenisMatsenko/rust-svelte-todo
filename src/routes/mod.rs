@@ -1,7 +1,7 @@
 pub mod todos;
 pub mod users;
 
-use axum::Router;
+use axum::{Router, extract::FromRef};
 use tower_http::trace::TraceLayer;
 use utoipa::{
     OpenApi,
@@ -11,14 +11,13 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use utoipa_scalar::{Scalar, Servable};
 use utoipa_swagger_ui::SwaggerUi;
 
-use crate::db::Database;
+use crate::{auth::AuthService, db::DatabaseService};
 
 #[derive(OpenApi)]
 #[openapi(
     tags(
-        (name = "auth", description = "Signup and signin"),
-        (name = "todos", description = "Todo management"),
-        (name = "users", description = "User management"),
+        (name = "Todos", description = "Todo management"),
+        (name = "Users", description = "User management"),
     ),
     modifiers(&SecurityAddon),
 )]
@@ -41,7 +40,27 @@ impl utoipa::Modify for SecurityAddon {
     }
 }
 
-pub fn build_router(db: Database) -> Router {
+/// Shared axum application state.
+/// Both `Database` and `AuthService` are extractable individually via `FromRef`.
+#[derive(Clone)]
+pub struct AppState {
+    pub db: DatabaseService,
+    pub auth: AuthService,
+}
+
+impl FromRef<AppState> for DatabaseService {
+    fn from_ref(state: &AppState) -> Self {
+        state.db.clone()
+    }
+}
+
+impl FromRef<AppState> for AuthService {
+    fn from_ref(state: &AppState) -> Self {
+        state.auth.clone()
+    }
+}
+
+pub fn build_router(db: DatabaseService, auth: AuthService) -> Router {
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .routes(routes!(users::signup))
         .routes(routes!(users::signin))
@@ -52,7 +71,7 @@ pub fn build_router(db: Database) -> Router {
             todos::update_todo,
             todos::delete_todo
         ))
-        .with_state(db)
+        .with_state(AppState { db, auth })
         .split_for_parts();
 
     router

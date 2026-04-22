@@ -1,6 +1,6 @@
 use crate::{
     auth::OptionalAuthSession,
-    db::Database,
+    db::DatabaseService,
     error::AppError,
     models::{CreateTodo, Todo, UpdateTodo},
 };
@@ -29,12 +29,12 @@ use ulid::Ulid;
         (status = 200, description = "List of todos", body = Vec<Todo>),
         (status = 401, description = "Unauthorized", body = crate::error::ErrorResponse),
     ),
-    tag = "todos"
+    tag = "Todos"
 )]
 #[tracing::instrument(skip_all)]
 pub async fn list_todos(
     OptionalAuthSession(user): OptionalAuthSession,
-    State(db): State<Database>,
+    State(db): State<DatabaseService>,
 ) -> Result<Json<Vec<Todo>>, AppError> {
     user.ok_or(AppError::Unauthorized)?;
 
@@ -65,12 +65,12 @@ pub async fn list_todos(
         (status = 401, description = "Unauthorized", body = crate::error::ErrorResponse),
         (status = 409, description = "Slug already exists", body = crate::error::ErrorResponse),
     ),
-    tag = "todos"
+    tag = "Todos"
 )]
 #[tracing::instrument(skip_all)]
 pub async fn create_todo(
     OptionalAuthSession(user): OptionalAuthSession,
-    State(db): State<Database>,
+    State(db): State<DatabaseService>,
     Json(payload): Json<CreateTodo>,
 ) -> Result<(StatusCode, Json<Todo>), AppError> {
     user.ok_or(AppError::Unauthorized)?;
@@ -115,12 +115,12 @@ pub async fn create_todo(
         (status = 401, description = "Unauthorized", body = crate::error::ErrorResponse),
         (status = 404, description = "Todo not found", body = crate::error::ErrorResponse),
     ),
-    tag = "todos"
+    tag = "Todos"
 )]
 #[tracing::instrument(skip_all, fields(todo.id = %id))]
 pub async fn get_todo(
     OptionalAuthSession(user): OptionalAuthSession,
-    State(db): State<Database>,
+    State(db): State<DatabaseService>,
     Path(id): Path<String>,
 ) -> Result<Json<Todo>, AppError> {
     user.ok_or(AppError::Unauthorized)?;
@@ -156,12 +156,12 @@ pub async fn get_todo(
         (status = 404, description = "Todo not found", body = crate::error::ErrorResponse),
         (status = 409, description = "Slug already exists", body = crate::error::ErrorResponse),
     ),
-    tag = "todos"
+    tag = "Todos"
 )]
 #[tracing::instrument(skip_all, fields(todo.id = %id))]
 pub async fn update_todo(
     OptionalAuthSession(user): OptionalAuthSession,
-    State(db): State<Database>,
+    State(db): State<DatabaseService>,
     Path(id): Path<String>,
     Json(payload): Json<UpdateTodo>,
 ) -> Result<Json<Todo>, AppError> {
@@ -183,13 +183,10 @@ pub async fn update_todo(
         }
     }
 
-    let todo = db
-        .update_todo(&id, &slug, payload)
-        .await?
-        .ok_or_else(|| {
-            tracing::warn!(todo.id = %id, "todo not found for update");
-            AppError::NotFound
-        })?;
+    let todo = db.update_todo(&id, &slug, payload).await?.ok_or_else(|| {
+        tracing::warn!(todo.id = %id, "todo not found for update");
+        AppError::NotFound
+    })?;
 
     tracing::info!(todo.id = %todo.id, todo.slug = %todo.slug, "todo updated");
     Ok(Json(todo))
@@ -214,12 +211,12 @@ pub async fn update_todo(
         (status = 401, description = "Unauthorized", body = crate::error::ErrorResponse),
         (status = 404, description = "Todo not found", body = crate::error::ErrorResponse),
     ),
-    tag = "todos"
+    tag = "Todos"
 )]
 #[tracing::instrument(skip_all, fields(todo.id = %id))]
 pub async fn delete_todo(
     OptionalAuthSession(user): OptionalAuthSession,
-    State(db): State<Database>,
+    State(db): State<DatabaseService>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     user.ok_or(AppError::Unauthorized)?;
