@@ -1,2 +1,5 @@
-/target
-.env
+back-end/target
+back-end/.env
+front-end/node_modules
+front-end/.svelte-kit
+front-end/build

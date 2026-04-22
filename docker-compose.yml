@@ -16,21 +16,21 @@ services:
       - postgres-data:/var/lib/postgresql/data
 
   app:
-    build: .
+    build: ./back-end
     ports:
       - "3000:3000"
     env_file:
-      - .env
+      - ./back-end/.env
     environment:
       DATABASE_URL: postgres://postgres:postgres@db:5432/todos
     depends_on:
       db:
         condition: service_healthy
     volumes:
-      - ./Cargo.toml:/app/Cargo.toml
-      - ./Cargo.lock:/app/Cargo.lock
-      - ./src:/app/src
-      - ./migrations:/app/migrations
+      - ./back-end/Cargo.toml:/app/Cargo.toml
+      - ./back-end/Cargo.lock:/app/Cargo.lock
+      - ./back-end/src:/app/src
+      - ./back-end/migrations:/app/migrations
       - cargo-registry:/usr/local/cargo/registry
       - target-cache:/app/target
 
