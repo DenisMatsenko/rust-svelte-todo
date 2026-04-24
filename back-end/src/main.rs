@@ -43,7 +43,7 @@ async fn main() {
 
     let db = db::DatabaseService::new(pool);
     let auth = auth::AuthService::new(db.clone(), config.jwt_secret);
-    let app: axum::Router = routes::build_router(db, auth, mongo);
+    let app: axum::Router = routes::build_router(db, auth, mongo, config.cors_origins);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
 

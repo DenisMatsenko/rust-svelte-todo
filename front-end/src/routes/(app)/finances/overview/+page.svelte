@@ -17,7 +17,6 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
-	import { Progress } from '$lib/components/ui/progress/index.js';
 	import * as Table from '$lib/components/ui/table/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import * as ContextMenu from '$lib/components/ui/context-menu/index.js';
@@ -93,6 +92,12 @@
 		return entries.reduce((max, e) => (e.fans_count > max.fans_count ? e : max), entries[0]);
 	}
 
+	function fillColor(value: number, max: number): string {
+		const ratio = Math.min(value / max, 1);
+		const hue = 120 * Math.sin(ratio * Math.PI);
+		return `hsl(${hue}, 72%, 42%)`;
+	}
+
 	function getScopeThreshold(fans: number, entries: BillingEntry[]): number | null {
 		return getScopeBillingEntry(fans, entries)?.fans_count ?? null;
 	}
@@ -128,14 +133,21 @@
 		return q?.data?.status === 200 ? (q.data.data.note ?? null) : null;
 	}
 
+	function getNotePrice(tenantIndex: number): number | null {
+		const q = noteQueries[tenantIndex];
+		return q?.data?.status === 200 ? (q.data.data.price ?? null) : null;
+	}
+
 	// ── Edit note ──────────────────────────────────────────────────────────────
 	let editOpen = $state(false);
 	let editingTenant = $state<TenantResponse | null>(null);
 	let editNoteText = $state('');
+	let editNotePrice = $state<number | null>(null);
 
 	function openEdit(tenant: TenantResponse, tenantIndex: number) {
 		editingTenant = tenant;
 		editNoteText = getNoteText(tenantIndex) ?? '';
+		editNotePrice = getNotePrice(tenantIndex);
 		editOpen = true;
 	}
 
@@ -158,7 +170,7 @@
 		if (!editingTenant) return;
 		upsertMutation.mutate({
 			mongoId: editingTenant.id,
-			data: { note: editNoteText.trim() || null }
+			data: { note: editNoteText.trim() || null, price: editNotePrice ?? null }
 		});
 	}
 
@@ -212,15 +224,19 @@
 						<Table.Head class="w-56">Name</Table.Head>
 						<Table.Head class="w-24">Plan</Table.Head>
 						<Table.Head class="w-44 text-right">Fans / Scope</Table.Head>
-						<Table.Head class="w-40">Fill</Table.Head>
+						<Table.Head class="w-32 min-w-32">Fill</Table.Head>
 						<Table.Head class="w-32 text-right">Expected price</Table.Head>
+						<Table.Head class="w-32 text-right">Custom price</Table.Head>
+						<Table.Head class="w-36 text-right">Diff</Table.Head>
 						<Table.Head>Note</Table.Head>
 					</Table.Row>
 				</Table.Header>
 				<Table.Body>
 					{#each tenants as tenant, i (tenant.id)}
-						{@const note = getNoteText(i)}
-						{@const isPending = noteQueries[i]?.isPending ?? true}
+						{@const ai = allTenants.findIndex((t) => t.id === tenant.id)}
+						{@const note = getNoteText(ai)}
+						{@const notePrice = getNotePrice(ai)}
+						{@const isPending = noteQueries[ai]?.isPending ?? true}
 						<ContextMenu.Root>
 							<ContextMenuPrimitive.Trigger>
 								{#snippet child({ props })}
@@ -263,10 +279,10 @@
 											{/if}
 										</Table.Cell>
 										<Table.Cell class="text-right font-mono text-muted-foreground tabular-nums">
-											{#if fansQueries[i]?.isPending ?? true}
+											{#if fansQueries[ai]?.isPending ?? true}
 												<span class="text-xs text-muted-foreground/50">…</span>
 											{:else}
-												{@const fans = getFansCount(i)}
+												{@const fans = getFansCount(ai)}
 												{@const threshold =
 													fans !== null ? getScopeThreshold(fans, billingEntries) : null}
 												{#if fans !== null && threshold !== null}
@@ -276,26 +292,34 @@
 												{/if}
 											{/if}
 										</Table.Cell>
-										<Table.Cell class="pr-4">
-											{#if fansQueries[i]?.isPending ?? true}
+										<Table.Cell class="w-32 min-w-32 pr-4">
+											{#if fansQueries[ai]?.isPending ?? true}
 												<div class="h-3 w-full animate-pulse rounded-full bg-muted"></div>
 											{:else}
-												{@const fans = getFansCount(i)}
+												{@const fans = getFansCount(ai)}
 												{@const threshold =
 													fans !== null ? getScopeThreshold(fans, billingEntries) : null}
 												{#if fans !== null && threshold !== null}
-													<Progress value={fans} max={threshold} class="h-2" />
+													<div class="relative h-2 w-full overflow-hidden rounded-full bg-muted">
+														<div
+															class="h-full rounded-full transition-all"
+															style="width: {Math.min(
+																(fans / threshold) * 100,
+																100
+															)}%; background-color: {fillColor(fans, threshold)};"
+														></div>
+													</div>
 												{:else}
 													<span class="text-xs text-muted-foreground">—</span>
 												{/if}
 											{/if}
 										</Table.Cell>
 										<Table.Cell class="text-right font-mono tabular-nums">
-											{#if fansQueries[i]?.isPending ?? true}
+											{#if fansQueries[ai]?.isPending ?? true}
 												<span class="text-xs text-muted-foreground/50">…</span>
 											{:else}
 												{@const price = getExpectedPrice(
-													getFansCount(i),
+													getFansCount(ai),
 													tenant.plan,
 													billingEntries
 												)}
@@ -303,6 +327,34 @@
 													{price.toLocaleString()}
 												{:else}
 													<span class="text-muted-foreground">—</span>
+												{/if}
+											{/if}
+										</Table.Cell>
+										<Table.Cell class="text-right font-mono tabular-nums">
+											{#if isPending}
+												<span class="text-xs text-muted-foreground/50">…</span>
+											{:else if notePrice !== null}
+												{notePrice.toLocaleString()}
+											{:else}
+												<span class="text-muted-foreground">—</span>
+											{/if}
+										</Table.Cell>
+										<Table.Cell class="text-right font-mono tabular-nums">
+											{#if !isPending && notePrice !== null && (() => {
+													const ep = getExpectedPrice(getFansCount(ai), tenant.plan, billingEntries);
+													return ep !== null && ep !== 0 && notePrice !== ep ? { diff: notePrice - ep, pct: Math.round(((notePrice - ep) / ep) * 100) } : null;
+												})() !== null}
+												{@const ep = getExpectedPrice(
+													getFansCount(ai),
+													tenant.plan,
+													billingEntries
+												)!}
+												{@const diff = notePrice - ep}
+												{@const pct = Math.round((diff / ep) * 100)}
+												{#if diff > 0}
+													<span class="text-purple-500">+{diff.toLocaleString()} ({pct}%)</span>
+												{:else}
+													<span class="text-red-500">{diff.toLocaleString()} ({pct}%)</span>
 												{/if}
 											{/if}
 										</Table.Cell>
@@ -323,7 +375,7 @@
 									{tenant.name}
 								</ContextMenu.Label>
 								<ContextMenu.Separator />
-								<ContextMenu.Item onclick={() => openEdit(tenant, i)}>Edit Note</ContextMenu.Item>
+								<ContextMenu.Item onclick={() => openEdit(tenant, ai)}>Edit Note</ContextMenu.Item>
 								<ContextMenu.Separator />
 								<ContextMenu.Item
 									class="text-destructive focus:text-destructive"
@@ -335,7 +387,7 @@
 						</ContextMenu.Root>
 					{:else}
 						<Table.Row>
-							<Table.Cell class="py-8 text-center text-muted-foreground" colspan={8}>
+							<Table.Cell class="py-8 text-center text-muted-foreground" colspan={10}>
 								No tenants found.
 							</Table.Cell>
 						</Table.Row>
@@ -354,6 +406,12 @@
 			<Dialog.Description>Note for <strong>{editingTenant?.name}</strong>.</Dialog.Description>
 		</Dialog.Header>
 		<form class="space-y-4 py-2" onsubmit={submitEdit}>
+			<input
+				type="number"
+				bind:value={editNotePrice}
+				placeholder="Custom price (integer)…"
+				class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+			/>
 			<textarea
 				bind:value={editNoteText}
 				placeholder="Write a note…"

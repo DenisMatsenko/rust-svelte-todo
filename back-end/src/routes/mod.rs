@@ -10,7 +10,7 @@ use axum::{
     extract::FromRef,
     http::{HeaderValue, Method, header},
 };
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::{cors::{AllowOrigin, CorsLayer}, trace::TraceLayer};
 use utoipa::{
     OpenApi,
     openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme},
@@ -80,7 +80,7 @@ impl FromRef<AppState> for MongoService {
     }
 }
 
-pub fn build_router(db: DatabaseService, auth: AuthService, mongo: MongoService) -> Router {
+pub fn build_router(db: DatabaseService, auth: AuthService, mongo: MongoService, cors_origins: Vec<String>) -> Router {
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .routes(routes!(auth::signin))
         .routes(routes!(auth::me))
@@ -104,7 +104,10 @@ pub fn build_router(db: DatabaseService, auth: AuthService, mongo: MongoService)
             finance_plan::update_finance_plan_entry,
             finance_plan::delete_finance_plan_entry
         ))
-        .routes(routes!(billing::list_billing_entries, billing::create_billing_entry))
+        .routes(routes!(
+            billing::list_billing_entries,
+            billing::create_billing_entry
+        ))
         .routes(routes!(
             billing::get_billing_entry,
             billing::update_billing_entry,
@@ -118,12 +121,13 @@ pub fn build_router(db: DatabaseService, auth: AuthService, mongo: MongoService)
         .with_state(AppState { db, auth, mongo })
         .split_for_parts();
 
+    let origins: Vec<HeaderValue> = cors_origins
+        .iter()
+        .map(|o| o.parse::<HeaderValue>().expect("valid CORS origin"))
+        .collect();
+
     let cors = CorsLayer::new()
-        .allow_origin(
-            "http://localhost:3001"
-                .parse::<HeaderValue>()
-                .expect("valid origin"),
-        )
+        .allow_origin(AllowOrigin::list(origins))
         .allow_methods([
             Method::GET,
             Method::POST,
